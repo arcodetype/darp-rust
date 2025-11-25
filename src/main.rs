@@ -26,8 +26,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// One-time sudo initialization
-    Init,
+    /// One-time sudo installation
+    Install,
     /// Deploys the environment
     Deploy,
     /// Starts a shell instance
@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(cmd) = cli.command {
         match cmd {
-            Command::Init => cmd_init(&paths, &mut config, &os, &engine)?,
+            Command::Install => cmd_install(&paths, &mut config, &os, &engine)?,
             Command::Deploy => cmd_deploy(&paths, &mut config, &os, &engine)?,
             Command::Shell {
                 environment,
@@ -218,13 +218,13 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_init(
+fn cmd_install(
     paths: &DarpPaths,
     config: &mut Config,
     os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
-    println!("Running initialization");
+    println!("Running installation");
 
     // OS-specific resolver + nginx.conf copy
     os.init_resolver()?;
