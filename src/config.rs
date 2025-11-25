@@ -1,0 +1,421 @@
+use anyhow::{anyhow, Result};
+use dirs::home_dir;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let data = fs::read(path)?;
+    Ok(serde_json::from_slice(&data)?)
+}
+
+#[derive(Clone, Debug)]
+pub struct DarpPaths {
+    pub _darp_root: PathBuf,
+    pub config_path: PathBuf,
+    pub portmap_path: PathBuf,
+    pub dnsmasq_dir: PathBuf,
+    pub vhost_container_conf: PathBuf,
+    pub hosts_container_path: PathBuf,
+    pub nginx_conf_path: PathBuf,
+}
+
+impl DarpPaths {
+    pub fn from_env() -> Result<Self> {
+        let home = home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
+        let darp_root_env = std::env::var("DARP_ROOT").unwrap_or_else(|_| {
+            home.join(".darp")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let darp_root = PathBuf::from(darp_root_env);
+
+        Ok(Self {
+            _darp_root: darp_root.clone(),
+            config_path: darp_root.join("config.json"),
+            portmap_path: darp_root.join("portmap.json"),
+            dnsmasq_dir: darp_root.join("dnsmasq.d"),
+            vhost_container_conf: darp_root.join("vhost_container.conf"),
+            hosts_container_path: darp_root.join("hosts_container"),
+            nginx_conf_path: darp_root.join("nginx.conf"),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Config {
+    pub engine: Option<String>,
+    pub domains: Option<BTreeMap<String, Domain>>,
+    pub environments: Option<BTreeMap<String, Environment>>,
+    pub urls_in_hosts: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Domain {
+    pub location: String,
+    #[serde(default)]
+    pub services: Option<BTreeMap<String, Service>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Service {
+    #[serde(default)]
+    pub host_portmappings: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Environment {
+    #[serde(default)]
+    pub volumes: Option<Vec<Volume>>,
+    #[serde(default)]
+    pub serve_command: Option<String>,
+    #[serde(default)]
+    pub image_repository: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Volume {
+    pub container: String,
+    pub host: String,
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, b"{}")?;
+            return Ok(Self::default());
+        }
+
+        let data = fs::read(path)?;
+        let cfg = serde_json::from_slice(&data).unwrap_or_default();
+        Ok(cfg)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let data = serde_json::to_vec_pretty(self)?;
+        fs::write(path, data)?;
+        Ok(())
+    }
+
+    pub fn parse_bool(&self, s: &str) -> Result<bool> {
+        let v = s.trim().to_lowercase();
+        match v.as_str() {
+            "true" | "1" | "yes" | "y" | "on" => Ok(true),
+            "false" | "0" | "no" | "n" | "off" => Ok(false),
+            _ => Err(anyhow!(
+                "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
+                s
+            )),
+        }
+    }
+
+    pub fn resolve_host_path(&self, template: &str, current_dir: &Path) -> Result<PathBuf> {
+        const PSEUDO_PWD_TOKEN: &str = "{pwd}";
+        let s = template
+            .replace(PSEUDO_PWD_TOKEN, &current_dir.to_string_lossy())
+            .replace("$(pwd)", &current_dir.to_string_lossy());
+        Ok(PathBuf::from(s))
+    }
+
+    pub fn resolve_image_name(
+        &self,
+        environment: Option<&Environment>,
+        cli_image: &str,
+    ) -> String {
+        if let Some(env) = environment {
+            if let Some(repo) = &env.image_repository {
+                return format!("{repo}:{image}", repo = repo, image = cli_image);
+            }
+        }
+        cli_image.to_string()
+    }
+
+    // --- domain/env helpers ---
+
+    pub fn add_domain(&mut self, location: &str) -> Result<()> {
+        let loc = PathBuf::from(location);
+        let domain_name = loc
+            .file_name()
+            .ok_or_else(|| anyhow!("Could not determine domain name from {location}"))?
+            .to_string_lossy()
+            .to_string();
+
+        let domains = self.domains.get_or_insert_with(BTreeMap::new);
+        if let Some(existing) = domains.get(&domain_name) {
+            return Err(anyhow!(
+                "domain {} already exists at {}",
+                domain_name,
+                existing.location
+            ));
+        }
+
+        domains.insert(
+            domain_name.clone(),
+            Domain {
+                location: location.to_string(),
+                services: None,
+            },
+        );
+
+        println!("created '{}' at {}", domain_name, location);
+        Ok(())
+    }
+
+    pub fn rm_domain(&mut self, name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("no domains configured"))?;
+        if domains.remove(name).is_none() {
+            return Err(anyhow!("domain {} does not exist", name));
+        }
+        println!("removed '{}'", name);
+        Ok(())
+    }
+
+    pub fn add_environment(&mut self, name: &str) -> Result<()> {
+        let envs = self.environments.get_or_insert_with(BTreeMap::new);
+        if envs.contains_key(name) {
+            return Err(anyhow!("Environment '{}' already exists.", name));
+        }
+        envs.insert(name.to_string(), Environment::default());
+        println!("Created environment '{}'.", name);
+        Ok(())
+    }
+
+    pub fn rm_environment(&mut self, name: &str) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        if envs.remove(name).is_none() {
+            return Err(anyhow!("Environment '{}' does not exist.", name));
+        }
+        println!("Removed environment '{}'.", name);
+        Ok(())
+    }
+
+    pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.serve_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_serve_command(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.serve_command.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no custom serve_command.",
+                env_name
+            ));
+        }
+
+        env.serve_command = None;
+        Ok(())
+    }
+
+    pub fn set_image_repository(&mut self, env_name: &str, repo: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.image_repository = Some(repo.to_string());
+        Ok(())
+    }
+
+    pub fn rm_image_repository(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.image_repository.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no custom image_repository.",
+                env_name
+            ));
+        }
+
+        env.image_repository = None;
+        Ok(())
+    }
+
+    pub fn add_portmap(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let service = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+        let host_maps = service
+            .host_portmappings
+            .get_or_insert_with(BTreeMap::new);
+
+        if host_maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Portmapping on host side '{}.{}' ({}:____) already exists",
+                domain_name,
+                service_name,
+                host_port
+            ));
+        }
+
+        host_maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created portmapping for '{}.{}' ({}:{})",
+            domain_name, service_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_portmap(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+
+        let service = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        let host_maps = service
+            .host_portmappings
+            .as_mut()
+            .ok_or_else(|| anyhow!("No host_portmappings configured"))?;
+
+        if host_maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Portmapping on host side '{}.{}' ({}:____) does not exist",
+                domain_name,
+                service_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed portmapping for '{}.{}' ({}:____)",
+            domain_name, service_name, host_port
+        );
+        Ok(())
+    }
+
+    pub fn add_volume(
+        &mut self,
+        env_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let env = envs
+            .get_mut(env_name)
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        let vols = env.volumes.get_or_insert_with(Vec::new);
+        let new_vol = Volume {
+            container: container_dir.to_string(),
+            host: host_dir.to_string(),
+        };
+
+        if vols.iter().any(|v| v.container == new_vol.container && v.host == new_vol.host) {
+            return Err(anyhow!(
+                "Volume mapping already exists for environment '{}': {} -> {}",
+                env_name,
+                new_vol.host,
+                new_vol.container
+            ));
+        }
+
+        vols.push(new_vol);
+        println!(
+            "Added volume to environment '{}': {} -> {}",
+            env_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
+    pub fn rm_volume(
+        &mut self,
+        env_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let env = envs
+            .get_mut(env_name)
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        let vols = env
+            .volumes
+            .as_mut()
+            .ok_or_else(|| anyhow!("No volumes configured for environment '{}'", env_name))?;
+
+        let before = vols.len();
+        vols.retain(|v| !(v.container == container_dir && v.host == host_dir));
+
+        if vols.len() == before {
+            return Err(anyhow!(
+                "No matching volume found in environment '{}' for host '{}' -> container '{}'",
+                env_name,
+                host_dir,
+                container_dir
+            ));
+        }
+
+        println!(
+            "Removed volume from environment '{}': {} -> {}",
+            env_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+}
