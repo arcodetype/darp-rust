@@ -26,18 +26,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// One-time sudo installation
-    Install,
+    /// Generate shell completion scripts
+    Completions {
+        /// Shell name: bash, zsh, fish, powershell, elvish
+        shell: String,
+    },
+    /// Configuration commands that modify config.json
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCommand,
+    },
     /// Deploys the environment
     Deploy,
-    /// Starts a shell instance
-    Shell {
-        /// Environment name (optional)
-        #[arg(short, long)]
-        environment: Option<String>,
-        /// Container image to use
-        container_image: String,
-    },
     /// Runs the environment serve_command
     Serve {
         /// Environment name (required)
@@ -46,6 +46,24 @@ enum Command {
         /// Container image to use
         container_image: String,
     },
+    /// Starts a shell instance
+    Shell {
+        /// Environment name (optional)
+        #[arg(short, long)]
+        environment: Option<String>,
+        /// Container image to use
+        container_image: String,
+    },
+    /// List Darp URLs
+    Urls,
+    /// One-time sudo installation
+    Install,
+    /// Uninstall darp system integration
+    Uninstall,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
     /// Set config values / environment options
     Set {
         #[command(subcommand)]
@@ -61,29 +79,10 @@ enum Command {
         #[command(subcommand)]
         cmd: RmCommand,
     },
-    /// List Darp URLs
-    Urls,
-    /// Generate shell completion scripts
-    Completions {
-        /// Shell name: bash, zsh, fish, powershell, elvish
-        shell: String,
-    },
 }
 
 #[derive(Subcommand, Debug)]
 enum SetCommand {
-    /// Set DARP_ROOT in shell config
-    DarpRoot {
-        new_darp_root: String,
-        #[arg(short = 'z', long)]
-        zshrc: Option<String>,
-    },
-    /// Set PODMAN_MACHINE in shell config
-    PodmanMachine {
-        new_podman_machine: String,
-        #[arg(short = 'z', long)]
-        zshrc: Option<String>,
-    },
     /// Set container engine (podman|docker)
     Engine {
         engine: String,
@@ -92,6 +91,11 @@ enum SetCommand {
     ImageRepository {
         environment: String,
         image_repository: String,
+    },
+    /// Set Podman machine name
+    PodmanMachine {
+        /// Name of the Podman machine to use (e.g. 'podman-machine-default')
+        new_podman_machine: String,
     },
     /// Set serve_command on an environment
     ServeCommand {
@@ -132,20 +136,9 @@ enum AddCommand {
 
 #[derive(Subcommand, Debug)]
 enum RmCommand {
-    /// Remove DARP_ROOT from shell config
-    DarpRoot {
-        #[arg(short = 'z', long)]
-        zshrc: Option<String>,
-    },
-    /// Remove PODMAN_MACHINE from shell config
-    PodmanMachine {
-        #[arg(short = 'z', long)]
-        zshrc: Option<String>,
-    },
     /// Remove a domain
     Domain {
         name: String,
-        /// Optional location, ignored
         location: Option<String>,
     },
     /// Remove an environment
@@ -156,23 +149,25 @@ enum RmCommand {
     ImageRepository {
         environment: String,
     },
+    /// Remove PODMAN_MACHINE from config
+    PodmanMachine {
+    },
     /// Remove port mapping from a service
     Portmap {
         domain_name: String,
         service_name: String,
         host_port: String,
-        /// Optional container port, ignored (keeps same CLI as Python)
         container_port: Option<String>,
+    },
+    /// Remove serve_command from an environment
+    ServeCommand {
+        environment: String,
     },
     /// Remove volume from an environment
     Volume {
         environment: String,
         container_dir: String,
         host_dir: String,
-    },
-    /// Remove serve_command from an environment
-    ServeCommand {
-        environment: String,
     },
 }
 
@@ -193,6 +188,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(cmd) = cli.command {
         match cmd {
             Command::Install => cmd_install(&paths, &mut config, &os, &engine)?,
+            Command::Uninstall => cmd_uninstall(&paths, &mut config, &os, &engine)?,
             Command::Deploy => cmd_deploy(&paths, &mut config, &os, &engine)?,
             Command::Shell {
                 environment,
@@ -202,9 +198,13 @@ fn main() -> anyhow::Result<()> {
                 environment,
                 container_image,
             } => cmd_serve(environment, container_image, &paths, &config, &engine)?,
-            Command::Set { cmd } => cmd_set(cmd, &paths, &mut config, &os, &engine_kind)?,
-            Command::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
-            Command::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
+            Command::Config { cmd } => match cmd {
+                ConfigCommand::Set { cmd } => {
+                    cmd_set(cmd, &paths, &mut config, &engine_kind)?
+                }
+                ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
+                ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
+            },
             Command::Urls => cmd_urls(&paths, &config)?,
             Command::Completions { shell } => cmd_completions(shell),
         }
@@ -237,6 +237,26 @@ fn cmd_install(
 
     // Persist any config changes (if needed)
     config.save(&paths.config_path)?;
+    Ok(())
+}
+
+fn cmd_uninstall(
+    _paths: &DarpPaths,
+    _config: &mut Config,
+    os: &OsIntegration,
+    engine: &Engine,
+) -> anyhow::Result<()> {
+    println!("Running uninstallation");
+
+    // Best-effort: stop darp containers and helper containers.
+    engine.stop_running_darps()?;
+    engine.stop_named_container("darp-reverse-proxy")?;
+    engine.stop_named_container("darp-masq")?;
+
+    // OS-level cleanup (resolver, etc.)
+    os.uninstall()?;
+
+    println!("Uninstall complete. Darp config.json has been left on disk.");
     Ok(())
 }
 
@@ -290,9 +310,11 @@ fn cmd_deploy(
                     serde_json::Value::Number(port_number.into()),
                 );
 
-                let url = format!("{folder}.{domain}.test", 
-                    folder = folder_name, 
-                    domain = domain_name);
+                let url = format!(
+                    "{folder}.{domain}.test",
+                    folder = folder_name,
+                    domain = domain_name
+                );
 
                 hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
 
@@ -578,28 +600,19 @@ fn cmd_set(
     cmd: SetCommand,
     paths: &DarpPaths,
     config: &mut Config,
-    os: &OsIntegration,
     _engine_kind: &EngineKind,
 ) -> anyhow::Result<()> {
     match cmd {
-        SetCommand::DarpRoot {
-            new_darp_root,
-            zshrc,
-        } => {
-            os.set_shell_var("DARP_ROOT", &new_darp_root, zshrc.as_deref())?;
-            println!(
-                "DARP_ROOT set to '{}' in shell config. Restart your shell or source it.",
-                new_darp_root
-            );
-        }
         SetCommand::PodmanMachine {
             new_podman_machine,
-            zshrc,
         } => {
-            os.set_shell_var("PODMAN_MACHINE", &new_podman_machine, zshrc.as_deref())?;
+            // Persist in config.json; env var is optional and legacy now.
+            config.podman_machine = Some(new_podman_machine.clone());
+            config.save(&paths.config_path)?;
             println!(
-                "PODMAN_MACHINE set to '{}' in shell config. Restart your shell or source it.",
-                new_podman_machine
+                "PODMAN_MACHINE set to '{}' in config ({}).",
+                new_podman_machine,
+                paths.config_path.display()
             );
         }
         SetCommand::Engine { engine } => {
@@ -688,11 +701,10 @@ fn cmd_rm(
     config: &mut Config,
 ) -> anyhow::Result<()> {
     match cmd {
-        RmCommand::DarpRoot { zshrc } => {
-            os::remove_shell_var("DARP_ROOT", zshrc.as_deref())?;
-        }
-        RmCommand::PodmanMachine { zshrc } => {
-            os::remove_shell_var("PODMAN_MACHINE", zshrc.as_deref())?;
+        RmCommand::PodmanMachine { } => {
+            // Clear from config.json
+            config.podman_machine = None;
+            config.save(&paths.config_path)?;
         }
         RmCommand::Domain { name, .. } => {
             config.rm_domain(&name)?;
@@ -744,7 +756,7 @@ fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
                 for (folder_name, port) in entries {
                     let port = port.as_u64().unwrap_or(0);
                     println!(
-                        "  http://{}.{} .test ({})",
+                        "  http://{}.{}.test ({})",
                         folder_name.blue(),
                         domain_name,
                         port

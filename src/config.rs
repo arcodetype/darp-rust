@@ -46,8 +46,9 @@ impl DarpPaths {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub engine: Option<String>,
-    pub domains: Option<BTreeMap<String, Domain>>,
-    pub environments: Option<BTreeMap<String, Environment>>,
+    pub podman_machine: Option<String>,
+    pub domains: Option<std::collections::BTreeMap<String, Domain>>,
+    pub environments: Option<std::collections::BTreeMap<String, Environment>>,
     pub urls_in_hosts: Option<bool>,
 }
 

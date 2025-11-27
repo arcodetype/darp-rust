@@ -170,78 +170,26 @@ impl<'a> OsIntegration<'a> {
         }
     }
 
-    pub fn set_shell_var(&self, var: &str, value: &str, zshrc: Option<&str>) -> Result<()> {
+    pub fn uninstall(&self) -> Result<()> {
         #[cfg(unix)]
         {
-            let zshrc_path = zshrc
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}/.zshrc", dirs::home_dir().unwrap().display()));
-
-            let path = Path::new(&zshrc_path);
-
-            if !path.exists() {
-                println!("{} does not exist; creating it.", zshrc_path);
-                fs::File::create(path)?;
-            }
-
-            let contents = fs::read_to_string(path)?;
-            let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
-
-            lines.retain(|l| !l.trim_start().starts_with(&format!("export {}=", var)));
-
-            while matches!(lines.last(), Some(s) if s.trim().is_empty()) {
-                lines.pop();
-            }
-
-            lines.push(String::new());
-            lines.push(format!(r#"export {}="{}""#, var, value));
-            lines.push(String::new());
-
-            fs::write(path, lines.join("\n"))?;
+            // Remove resolver file; leave Darp config directory intact.
+            Command::new("sudo")
+                .arg("rm")
+                .arg("-f")
+                .arg(self.resolver_file)
+                .status()
+                .map_err(|e| anyhow!("failed to remove resolver file: {}", e))?;
+            println!("{} removed", self.resolver_file.green());
+            println!("Darp resolver removed. Config and data under $DARP_ROOT were left untouched.");
             Ok(())
         }
 
         #[cfg(not(unix))]
         {
-            Err(anyhow!("Shell var updates not implemented for this OS"))
+            Err(anyhow!(
+                "Uninstall is currently implemented only on Unix-like systems"
+            ))
         }
-    }
-}
-
-pub fn remove_shell_var(var: &str, zshrc: Option<&str>) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let zshrc_path = zshrc
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("{}/.zshrc", dirs::home_dir().unwrap().display()));
-
-        let path = Path::new(&zshrc_path);
-        if !path.exists() {
-            println!("{} does not exist.", zshrc_path);
-            return Ok(());
-        }
-
-        let contents = fs::read_to_string(path)?;
-        let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
-        let before = lines.len();
-
-        lines.retain(|l| !l.trim_start().starts_with(&format!("export {}=", var)));
-
-        if lines.len() == before {
-            println!("No {} entry found in {}.", var, zshrc_path);
-            return Ok(());
-        }
-
-        fs::write(path, lines.join("\n"))?;
-        println!(
-            "Removed {} from {}. Restart your shell or source it.",
-            var, zshrc_path
-        );
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    {
-        Err(anyhow!("Shell var removal not implemented for this OS"))
     }
 }

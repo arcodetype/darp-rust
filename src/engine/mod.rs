@@ -36,8 +36,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(kind: EngineKind, _config: &Config) -> Result<Self> {
-        let podman_machine = std::env::var("PODMAN_MACHINE").ok();
+    pub fn new(kind: EngineKind, config: &Config) -> Result<Self> {
+        let podman_machine = config.podman_machine.clone();
+
         Ok(Self {
             bin: kind.bin(),
             kind,
@@ -90,7 +91,10 @@ impl Engine {
                 }
 
                 let text = String::from_utf8_lossy(&output.stdout);
-                let machine_env = self.podman_machine.as_deref().unwrap_or("podman-machine-default");
+                let machine_env = self
+                    .podman_machine
+                    .as_deref()
+                    .unwrap_or("podman-machine-default");
 
                 for line in text.lines() {
                     let parts: Vec<_> = line.split_whitespace().collect();
@@ -257,6 +261,21 @@ impl Engine {
         Ok(())
     }
 
+    pub fn stop_named_container(&self, name: &str) -> Result<()> {
+        let Some(bin) = self.bin else { return Ok(()) };
+        if !self.is_container_running(name) {
+            return Ok(());
+        }
+        println!("stopping {}", name.cyan());
+        Command::new(bin)
+            .arg("stop")
+            .arg(name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        Ok(())
+    }
+
     pub fn run_container_interactive(
         &self,
         mut cmd: Command,
@@ -296,7 +315,6 @@ impl Engine {
 
         Ok(())
     }
-
 
     pub fn configure_unprivileged_ports_if_needed(&self) -> Result<()> {
         // Keep behavior only for podman + mac/linux; for Docker we skip.
