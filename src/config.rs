@@ -54,7 +54,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Domain {
-    pub location: String,
+    pub name: String,
     #[serde(default)]
     pub services: Option<BTreeMap<String, Service>>,
 }
@@ -109,7 +109,10 @@ impl Config {
         let v = s.trim().to_lowercase();
         match v.as_str() {
             "true" | "1" | "yes" | "y" | "on" => Ok(true),
-            "false" | "0" | "no" | "n" | "off" => Ok(false),
+            "false" | "0" | "no" | "n" | "off" => Err(anyhow!(
+                "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
+                s
+            )),
             _ => Err(anyhow!(
                 "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
                 s
@@ -141,31 +144,49 @@ impl Config {
     // --- domain/env helpers ---
 
     pub fn add_domain(&mut self, location: &str) -> Result<()> {
-        let loc = PathBuf::from(location);
-        let domain_name = loc
+        let loc_path = PathBuf::from(location);
+        let domain_label = loc_path
             .file_name()
             .ok_or_else(|| anyhow!("Could not determine domain name from {location}"))?
             .to_string_lossy()
             .to_string();
 
+        let domain_name = slugify_name(&domain_label);
+
+        let loc_abs = fs::canonicalize(&loc_path).map_err(|e| {
+            anyhow!(
+                "Failed to canonicalize domain location '{}': {}",
+                location,
+                e
+            )
+        })?;
+        let loc_key = loc_abs.to_string_lossy().to_string();
+
         let domains = self.domains.get_or_insert_with(BTreeMap::new);
-        if let Some(existing) = domains.get(&domain_name) {
+
+        if domains.contains_key(&loc_key) {
             return Err(anyhow!(
-                "domain {} already exists at {}",
-                domain_name,
-                existing.location
+                "Domain with location '{}' already exists.",
+                loc_key
+            ));
+        }
+
+        if domains.values().any(|d| d.name == domain_name) {
+            return Err(anyhow!(
+                "Domain name '{}' already exists. Domain names must be unique.",
+                domain_name
             ));
         }
 
         domains.insert(
-            domain_name.clone(),
+            loc_key.clone(),
             Domain {
-                location: location.to_string(),
+                name: domain_name.clone(),
                 services: None,
             },
         );
 
-        println!("created '{}' at {}", domain_name, location);
+        println!("created '{}' at {}", domain_name, loc_key);
         Ok(())
     }
 
@@ -174,11 +195,20 @@ impl Config {
             .domains
             .as_mut()
             .ok_or_else(|| anyhow!("no domains configured"))?;
-        if domains.remove(name).is_none() {
-            return Err(anyhow!("domain {} does not exist", name));
+
+        // Support removing either by name or by exact location key.
+        let key_to_remove = domains
+            .iter()
+            .find(|(location, domain)| domain.name == name || location.as_str() == name)
+            .map(|(location, _)| location.clone());
+
+        if let Some(key) = key_to_remove {
+            domains.remove(&key);
+            println!("removed '{}'", name);
+            Ok(())
+        } else {
+            Err(anyhow!("domain {} does not exist", name))
         }
-        println!("removed '{}'", name);
-        Ok(())
     }
 
     pub fn add_environment(&mut self, name: &str) -> Result<()> {
@@ -272,8 +302,11 @@ impl Config {
             .domains
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
+
+        // Look up by logical domain name (Domain.name), *not* by location key.
         let domain = domains
-            .get_mut(domain_name)
+            .values_mut()
+            .find(|d| d.name == domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -311,8 +344,10 @@ impl Config {
             .domains
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
+
         let domain = domains
-            .get_mut(domain_name)
+            .values_mut()
+            .find(|d| d.name == domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -365,7 +400,10 @@ impl Config {
             host: host_dir.to_string(),
         };
 
-        if vols.iter().any(|v| v.container == new_vol.container && v.host == new_vol.host) {
+        if vols
+            .iter()
+            .any(|v| v.container == new_vol.container && v.host == new_vol.host)
+        {
             return Err(anyhow!(
                 "Volume mapping already exists for environment '{}': {} -> {}",
                 env_name,
@@ -418,5 +456,38 @@ impl Config {
             env_name, host_dir, container_dir
         );
         Ok(())
+    }
+}
+
+/// Simple slugifier for domain names:
+/// - lower-cases
+/// - turns spaces/underscores/dashes into single '-'
+/// - strips leading/trailing '-'
+fn slugify_name(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+
+    for ch in input.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if ch.is_whitespace() || ch == '_' || ch == '-' {
+            if !last_dash && !out.is_empty() {
+                out.push('-');
+                last_dash = true;
+            }
+        } else {
+            // skip other punctuation
+        }
+    }
+
+    if out.ends_with('-') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        "domain".to_string()
+    } else {
+        out
     }
 }

@@ -56,7 +56,7 @@ enum Command {
     },
     /// List Darp URLs
     Urls,
-    /// One-time sudo installation
+    /// Install darp system installation
     Install,
     /// Uninstall darp system integration
     Uninstall,
@@ -150,8 +150,7 @@ enum RmCommand {
         environment: String,
     },
     /// Remove PODMAN_MACHINE from config
-    PodmanMachine {
-    },
+    PodmanMachine {},
     /// Remove port mapping from a service
     Portmap {
         domain_name: String,
@@ -263,7 +262,7 @@ fn cmd_uninstall(
 fn cmd_deploy(
     paths: &DarpPaths,
     config: &mut Config,
-    os: &OsIntegration,
+    _os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
     engine.require_ready()?;
@@ -285,21 +284,25 @@ fn cmd_deploy(
 
     let mut port_number = 50100u16;
 
+    // NOTE: single braces now; we are NOT using `format!`, just `.replace()`
     let host_proxy_template = r#"server {
     listen 80;
     server_name {url};
-    location / {{
+    location / {
         proxy_pass http://{host_gateway}:{port}/;
         proxy_set_header Host $host;
-    }}
+    }
 }
 "#;
 
-    for (domain_name, domain) in domains.iter() {
-        let location = &domain.location;
+    // Truncate vhost_container.conf at the start of each deploy so we don't
+    // keep appending duplicate server blocks.
+    std::fs::write(&paths.vhost_container_conf, b"")?;
+
+    for (location, domain) in domains.iter() {
+        let entries = std::fs::read_dir(location)?;
         let mut domain_map = serde_json::Map::new();
 
-        let entries = std::fs::read_dir(location)?;
         for entry in entries {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
@@ -313,7 +316,7 @@ fn cmd_deploy(
                 let url = format!(
                     "{folder}.{domain}.test",
                     folder = folder_name,
-                    domain = domain_name
+                    domain = domain.name
                 );
 
                 hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
@@ -333,11 +336,10 @@ fn cmd_deploy(
             }
         }
 
-        portmap.insert(domain_name.clone(), serde_json::Value::Object(domain_map));
+        portmap.insert(domain.name.clone(), serde_json::Value::Object(domain_map));
     }
 
     std::fs::write(&paths.hosts_container_path, hosts_container_lines.join(""))?;
-
     std::fs::write(&paths.portmap_path, serde_json::to_vec_pretty(&portmap)?)?;
 
     // Restart reverse proxy and stop darp_* containers
@@ -347,6 +349,9 @@ fn cmd_deploy(
 
     // Optionally sync /etc/hosts if urls_in_hosts is enabled
     if config.urls_in_hosts.unwrap_or(false) {
+        // Note: we sync directly to the system hosts file using OsIntegration.
+        // We only map to 127.0.0.1 here; the container sees 0.0.0.0 above.
+        let os = OsIntegration::new(paths, config, &engine.kind);
         os.sync_system_hosts(&hosts_container_lines)?;
     }
 
@@ -374,36 +379,41 @@ fn cmd_shell(
         .to_string();
 
     let parent_directory = current_dir.parent().unwrap_or(&current_dir);
-    let parent_directory_name = parent_directory
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let parent_canonical =
+        std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
+    let parent_directory_key = parent_canonical.to_string_lossy().to_string();
 
-    let domain = config
+    let (domain, domain_name) = config
         .domains
         .as_ref()
-        .and_then(|d| d.get(&parent_directory_name))
+        .and_then(|d| d.get(&parent_directory_key))
+        .map(|domain| (domain, domain.name.clone()))
         .unwrap_or_else(|| {
             eprintln!(
-                "domain, {} does not exist in darp's domain configuration.",
-                parent_directory_name
+                "domain location '{}' does not exist in darp's domain configuration.",
+                parent_directory_key
             );
             std::process::exit(1);
         });
 
-    let container_name = format!("darp_{}_{}", parent_directory_name, current_directory_name);
+    let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_interactive(&container_name);
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
-        .arg("-v")
-        .arg(format!("{}:/etc/nginx/nginx.conf", paths.nginx_conf_path.display()))
+        .arg(format!(
+            "{}:/etc/hosts",
+            paths.hosts_container_path.display()
+        ))
         .arg("-v")
         .arg(format!(
-            "{}:/etc/nginx/http.d/vhost_docker.conf",
+            "{}:/etc/nginx/nginx.conf",
+            paths.nginx_conf_path.display()
+        ))
+        .arg("-v")
+        .arg(format!(
+            "{}:/etc/nginx/http.d/vhost_container.conf",
             paths.vhost_container_conf.display()
         ));
 
@@ -437,7 +447,7 @@ fn cmd_shell(
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
 
     let rev_proxy_port = portmap
-        .get(&parent_directory_name)
+        .get(&domain_name)
         .and_then(|d| d.get(&current_directory_name))
         .and_then(|v| v.as_u64())
         .unwrap_or_else(|| {
@@ -459,7 +469,7 @@ else
     echo "nginx not found, skipping";
 fi;
 echo "";
-echo "To leave this shell and stop the container, type: \033[33mexit\033[0m";
+echo "To leave this shell and stop the container, type: $(printf '\033[33m')exit$(printf '\033[0m')"
 echo "";
 cd /app; exec sh"#;
 
@@ -503,36 +513,41 @@ fn cmd_serve(
         .to_string();
 
     let parent_directory = current_dir.parent().unwrap_or(&current_dir);
-    let parent_directory_name = parent_directory
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let parent_canonical =
+        std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
+    let parent_directory_key = parent_canonical.to_string_lossy().to_string();
 
-    let domain = config
+    let (domain, domain_name) = config
         .domains
         .as_ref()
-        .and_then(|d| d.get(&parent_directory_name))
+        .and_then(|d| d.get(&parent_directory_key))
+        .map(|domain| (domain, domain.name.clone()))
         .unwrap_or_else(|| {
             eprintln!(
-                "domain, {} does not exist in darp's domain configuration.",
-                parent_directory_name
+                "domain location '{}' does not exist in darp's domain configuration.",
+                parent_directory_key
             );
             std::process::exit(1);
         });
 
-    let container_name = format!("darp_{}_{}", parent_directory_name, current_directory_name);
+    let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_noninteractive(&container_name);
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
-        .arg("-v")
-        .arg(format!("{}:/etc/nginx/nginx.conf", paths.nginx_conf_path.display()))
+        .arg(format!(
+            "{}:/etc/hosts",
+            paths.hosts_container_path.display()
+        ))
         .arg("-v")
         .arg(format!(
-            "{}:/etc/nginx/http.d/vhost_docker.conf",
+            "{}:/etc/nginx/nginx.conf",
+            paths.nginx_conf_path.display()
+        ))
+        .arg("-v")
+        .arg(format!(
+            "{}:/etc/nginx/http.d/vhost_container.conf",
             paths.vhost_container_conf.display()
         ));
 
@@ -564,7 +579,7 @@ fn cmd_serve(
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
 
     let rev_proxy_port = portmap
-        .get(&parent_directory_name)
+        .get(&domain_name)
         .and_then(|d| d.get(&current_directory_name))
         .and_then(|v| v.as_u64())
         .unwrap_or_else(|| {
@@ -701,7 +716,7 @@ fn cmd_rm(
     config: &mut Config,
 ) -> anyhow::Result<()> {
     match cmd {
-        RmCommand::PodmanMachine { } => {
+        RmCommand::PodmanMachine {} => {
             // Clear from config.json
             config.podman_machine = None;
             config.save(&paths.config_path)?;
