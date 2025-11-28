@@ -5,8 +5,10 @@ mod os;
 use clap::{Parser, Subcommand, CommandFactory};
 use clap_complete::{generate, shells};
 use colored::*;
-use std::io;
+use dirs::home_dir;
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 
 use crate::config::{Config, DarpPaths};
 use crate::engine::{Engine, EngineKind};
@@ -26,17 +28,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Generate shell completion scripts
-    Completions {
-        /// Shell name: bash, zsh, fish, powershell, elvish
-        shell: String,
-    },
     /// Configuration commands that modify config.json
     Config {
         #[command(subcommand)]
         cmd: ConfigCommand,
     },
-    /// Deploys the environment
+    /// Generates domains and starts reverse proxy
     Deploy,
     /// Runs the environment serve_command
     Serve {
@@ -205,7 +202,6 @@ fn main() -> anyhow::Result<()> {
                 ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
             },
             Command::Urls => cmd_urls(&paths, &config)?,
-            Command::Completions { shell } => cmd_completions(shell),
         }
     } else {
         // No subcommand: print help
@@ -216,6 +212,248 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Shell detection & rc helpers
+// ---------------------------------------------------------------------------
+
+const RC_START_MARKER: &str = "# >>> darp completion start >>>";
+const RC_END_MARKER: &str = "# <<< darp completion end <<<";
+
+fn detect_shell() -> Option<&'static str> {
+    if let Ok(shell_path) = std::env::var("SHELL") {
+        if shell_path.ends_with("zsh") {
+            Some("zsh")
+        } else if shell_path.ends_with("bash") {
+            Some("bash")
+        } else if shell_path.ends_with("fish") {
+            Some("fish")
+        } else if shell_path.ends_with("pwsh") || shell_path.ends_with("powershell") {
+            Some("powershell")
+        } else if shell_path.ends_with("elvish") {
+            Some("elvish")
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn ensure_rc_block(rc_path: &Path, body: &str) -> anyhow::Result<()> {
+    let contents = fs::read_to_string(rc_path).unwrap_or_default();
+
+    if contents.contains(RC_START_MARKER) {
+        return Ok(());
+    }
+
+    let mut new_contents = contents;
+    if !new_contents.is_empty() && !new_contents.ends_with('\n') {
+        new_contents.push('\n');
+    }
+
+    new_contents.push_str(RC_START_MARKER);
+    new_contents.push('\n');
+    new_contents.push_str(body);
+    if !body.ends_with('\n') {
+        new_contents.push('\n');
+    }
+    new_contents.push_str(RC_END_MARKER);
+    new_contents.push('\n');
+
+    if let Some(parent) = rc_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(rc_path, new_contents)?;
+    Ok(())
+}
+
+fn remove_rc_block(rc_path: &Path) -> anyhow::Result<()> {
+    let contents = match fs::read_to_string(rc_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let start = if let Some(s) = contents.find(RC_START_MARKER) {
+        s
+    } else {
+        return Ok(());
+    };
+
+    // Find end after start
+    let after_start = &contents[start..];
+    let end_rel = if let Some(e) = after_start.find(RC_END_MARKER) {
+        e + RC_END_MARKER.len()
+    } else {
+        contents.len() - start
+    };
+    let end = start + end_rel;
+
+    let mut new_contents = String::new();
+    new_contents.push_str(contents[..start].trim_end_matches('\n'));
+    if !new_contents.is_empty() {
+        new_contents.push('\n');
+    }
+    let tail = contents[end..].trim_start_matches('\n');
+    if !tail.is_empty() {
+        if !new_contents.is_empty() {
+            new_contents.push('\n');
+        }
+        new_contents.push_str(tail);
+        new_contents.push('\n');
+    }
+
+    fs::write(rc_path, new_contents)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shell completion install/uninstall
+// ---------------------------------------------------------------------------
+
+fn install_shell_completions() -> anyhow::Result<()> {
+    let Some(shell) = detect_shell() else {
+        println!("Could not detect shell from $SHELL; skipping shell completion install.");
+        return Ok(());
+    };
+
+    let Some(home) = home_dir() else {
+        println!("Could not determine home directory; skipping shell completion install.");
+        return Ok(());
+    };
+
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+
+    match shell {
+        "bash" => {
+            let dir = home.join(".local/share/bash-completion/completions");
+            fs::create_dir_all(&dir)?;
+            let path = dir.join("darp");
+            let mut file = fs::File::create(&path)?;
+            generate(shells::Bash, &mut cmd, name, &mut file);
+            println!("Installed bash completions to {}", path.display());
+
+            // Wire into ~/.bashrc
+            let rc_path = home.join(".bashrc");
+            let body = r#"if command -v darp >/dev/null 2>&1; then
+  source "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/darp"
+fi"#;
+            ensure_rc_block(&rc_path, body)?;
+            println!("Updated {} with darp completion block", rc_path.display());
+        }
+        "zsh" => {
+            let dir = home.join(".zfunc");
+            fs::create_dir_all(&dir)?;
+            let path = dir.join("_darp");
+            let mut file = fs::File::create(&path)?;
+            generate(shells::Zsh, &mut cmd, name, &mut file);
+            println!("Installed zsh completions to {}", path.display());
+
+            // Wire into ~/.zshrc
+            let rc_path = home.join(".zshrc");
+            let body = r#"if command -v darp >/dev/null 2>&1; then
+  fpath+=("$HOME/.zfunc")
+  autoload -Uz compinit
+  compinit
+fi"#;
+            ensure_rc_block(&rc_path, body)?;
+            println!("Updated {} with darp completion block", rc_path.display());
+        }
+        "fish" => {
+            let dir = home.join(".config/fish/completions");
+            fs::create_dir_all(&dir)?;
+            let path = dir.join("darp.fish");
+            let mut file = fs::File::create(&path)?;
+            generate(shells::Fish, &mut cmd, name, &mut file);
+            println!("Installed fish completions to {}", path.display());
+            println!("Fish automatically loads completions from ~/.config/fish/completions.");
+        }
+        "powershell" => {
+            println!("PowerShell completion installation is not yet automated; skipping.");
+        }
+        "elvish" => {
+            println!("Elvish completion installation is not yet automated; skipping.");
+        }
+        other => {
+            println!(
+                "Shell '{}' not supported for automatic completions; skipping.",
+                other
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn uninstall_shell_completions() -> anyhow::Result<()> {
+    let Some(shell) = detect_shell() else {
+        println!("Could not detect shell from $SHELL; skipping shell completion removal.");
+        return Ok(());
+    };
+
+    let Some(home) = home_dir() else {
+        println!("Could not determine home directory; skipping shell completion removal.");
+        return Ok(());
+    };
+
+    match shell {
+        "bash" => {
+            let path = home.join(".local/share/bash-completion/completions/darp");
+            if path.exists() {
+                if let Err(e) = fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e.into());
+                    }
+                } else {
+                    println!("Removed bash completions at {}", path.display());
+                }
+            }
+            let rc_path = home.join(".bashrc");
+            remove_rc_block(&rc_path)?;
+        }
+        "zsh" => {
+            let path = home.join(".zfunc/_darp");
+            if path.exists() {
+                if let Err(e) = fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e.into());
+                    }
+                } else {
+                    println!("Removed zsh completions at {}", path.display());
+                }
+            }
+            let rc_path = home.join(".zshrc");
+            remove_rc_block(&rc_path)?;
+        }
+        "fish" => {
+            let path = home.join(".config/fish/completions/darp.fish");
+            if path.exists() {
+                if let Err(e) = fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e.into());
+                    }
+                } else {
+                    println!("Removed fish completions at {}", path.display());
+                }
+            }
+            // No rc modification needed for fish.
+        }
+        _ => {
+            println!(
+                "Shell '{}' not supported for automatic completion removal; skipping.",
+                shell
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
 
 fn cmd_install(
     paths: &DarpPaths,
@@ -233,6 +471,9 @@ fn cmd_install(
 
     // Podman-specific unprivileged_port_start logic lives in engine module
     engine.configure_unprivileged_ports_if_needed()?;
+
+    // Install shell completions for detected shell and update rc files
+    install_shell_completions()?;
 
     // Persist any config changes (if needed)
     config.save(&paths.config_path)?;
@@ -254,6 +495,9 @@ fn cmd_uninstall(
 
     // OS-level cleanup (resolver, etc.)
     os.uninstall()?;
+
+    // Remove shell completions & rc entries
+    uninstall_shell_completions()?;
 
     println!("Uninstall complete. Darp config.json has been left on disk.");
     Ok(())
@@ -782,23 +1026,4 @@ fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn cmd_completions(shell: String) {
-    use clap::CommandFactory;
-
-    let mut cmd = Cli::command();
-    let name = cmd.get_name().to_string();
-
-    match shell.as_str() {
-        "bash" => generate(shells::Bash, &mut cmd, name, &mut io::stdout()),
-        "zsh" => generate(shells::Zsh, &mut cmd, name, &mut io::stdout()),
-        "fish" => generate(shells::Fish, &mut cmd, name, &mut io::stdout()),
-        "powershell" => generate(shells::PowerShell, &mut cmd, name, &mut io::stdout()),
-        "elvish" => generate(shells::Elvish, &mut cmd, name, &mut io::stdout()),
-        other => {
-            eprintln!("Unsupported shell: {}", other);
-            std::process::exit(1);
-        }
-    }
 }
