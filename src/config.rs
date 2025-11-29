@@ -222,28 +222,6 @@ impl Config {
         }
     }
 
-    pub fn add_environment(&mut self, name: &str) -> Result<()> {
-        let envs = self.environments.get_or_insert_with(BTreeMap::new);
-        if envs.contains_key(name) {
-            return Err(anyhow!("Environment '{}' already exists.", name));
-        }
-        envs.insert(name.to_string(), Environment::default());
-        println!("Created environment '{}'.", name);
-        Ok(())
-    }
-
-    pub fn rm_environment(&mut self, name: &str) -> Result<()> {
-        let envs = self
-            .environments
-            .as_mut()
-            .ok_or_else(|| anyhow!("No environments configured"))?;
-        if envs.remove(name).is_none() {
-            return Err(anyhow!("Environment '{}' does not exist.", name));
-        }
-        println!("Removed environment '{}'.", name);
-        Ok(())
-    }
-
     // Environment-level serve_command
 
     pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
@@ -306,7 +284,7 @@ impl Config {
         Ok(())
     }
 
-    // Service-level port mappings (existing behavior)
+    // Service-level port mappings
 
     pub fn add_portmap(
         &mut self,
@@ -397,7 +375,7 @@ impl Config {
         Ok(())
     }
 
-    // Environment-level port mappings
+    // Environment-level port mappings (auto-creates environment)
 
     pub fn add_env_portmap(
         &mut self,
@@ -405,13 +383,10 @@ impl Config {
         host_port: &str,
         container_port: &str,
     ) -> Result<()> {
-        let envs = self
-            .environments
-            .as_mut()
-            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let envs = self.environments.get_or_insert_with(BTreeMap::new);
         let env = envs
-            .get_mut(env_name)
-            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+            .entry(env_name.to_string())
+            .or_insert_with(Environment::default);
 
         let maps = env
             .host_portmappings
@@ -466,7 +441,7 @@ impl Config {
         Ok(())
     }
 
-    // Environment-level volumes
+    // Environment-level volumes (auto-creates environment)
 
     pub fn add_volume(
         &mut self,
@@ -474,13 +449,10 @@ impl Config {
         container_dir: &str,
         host_dir: &str,
     ) -> Result<()> {
-        let envs = self
-            .environments
-            .as_mut()
-            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let envs = self.environments.get_or_insert_with(BTreeMap::new);
         let env = envs
-            .get_mut(env_name)
-            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+            .entry(env_name.to_string())
+            .or_insert_with(Environment::default);
 
         let vols = env.volumes.get_or_insert_with(Vec::new);
         let new_vol = Volume {

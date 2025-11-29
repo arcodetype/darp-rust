@@ -142,11 +142,8 @@ enum AddCommand {
         /// Location of the domain folder
         location: String,
     },
-    /// Add an environment
-    Environment {
-        name: String,
-    },
-    /// Add environment-scoped configuration (volumes, port mappings)
+    /// Add environment-scoped configuration (volumes, port mappings). Environments
+    /// are created automatically as needed.
     Env {
         #[command(subcommand)]
         cmd: AddEnvCommand,
@@ -160,13 +157,13 @@ enum AddCommand {
 
 #[derive(Subcommand, Debug)]
 enum AddEnvCommand {
-    /// Add port mapping to an environment
+    /// Add port mapping to an environment (auto-creates environment if needed)
     Portmap {
         environment: String,
         host_port: String,
         container_port: String,
     },
-    /// Add volume to an environment
+    /// Add volume to an environment (auto-creates environment if needed)
     Volume {
         environment: String,
         container_dir: String,
@@ -198,10 +195,6 @@ enum RmCommand {
     Domain {
         name: String,
         location: Option<String>,
-    },
-    /// Remove an environment
-    Environment {
-        name: String,
     },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
@@ -900,10 +893,10 @@ fn cmd_serve(
         .and_then(|d| d.get(&parent_directory_key))
         .map(|domain| (domain, domain.name.clone()))
         .unwrap_or_else(|| {
-            eprintln!(
+            eprintln![
                 "domain location '{}' does not exist in darp's domain configuration.",
                 parent_directory_key
-            );
+            ];
             std::process::exit(1);
         });
 
@@ -1109,10 +1102,10 @@ fn cmd_set(
                     &image_repository,
                 )?;
                 config.save(&paths.config_path)?;
-                println!(
+                println![
                     "Set image_repository for service '{}.{}' to:\n  {}",
                     domain_name, service_name, image_repository
-                );
+                ];
             }
             SetSvcCommand::ServeCommand {
                 domain_name,
@@ -1147,10 +1140,6 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
     match cmd {
         AddCommand::Domain { location } => {
             config.add_domain(&location)?;
-            config.save(&paths.config_path)?;
-        }
-        AddCommand::Environment { name } => {
-            config.add_environment(&name)?;
             config.save(&paths.config_path)?;
         }
         AddCommand::Env { cmd } => match cmd {
@@ -1209,10 +1198,6 @@ fn cmd_rm(
         }
         RmCommand::Domain { name, .. } => {
             config.rm_domain(&name)?;
-            config.save(&paths.config_path)?;
-        }
-        RmCommand::Environment { name } => {
-            config.rm_environment(&name)?;
             config.save(&paths.config_path)?;
         }
         RmCommand::Env { cmd } => match cmd {
