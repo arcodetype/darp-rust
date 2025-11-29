@@ -4,10 +4,13 @@
 
 This is the Rust Port of this application.
 
-## Image add-ons
+## Build
 
-```sh
-apk add --no-cache build-base
+### Mac
+
+```
+carbo build --release
+sudo cp ./target/release/darp /usr/local/bin/darp 
 ```
 
 ## Tutorial
