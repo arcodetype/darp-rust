@@ -35,7 +35,7 @@ darp deploy
 darp urls
 ```
 
-> Note: After creating any new project inside `~/projects`, run `darp deploy` so darp can register it.
+> Note: After creating any new projects inside one of your domains, run `darp deploy` so darp can register a URL for it.
 
 ### Step Two: Create Your First "darp compatible" Image
 
@@ -60,6 +60,8 @@ RUN apk add nginx && go install github.com/air-verse/air@latest
 
 WORKDIR /app
 ```
+
+> Note: You can find compatibile [dockerfiles](./dockerfiles/) in the `./dockerfiles/` directory of this project.
 
 ### Step Three: Shell Into Your Project (Changes Persist Locally)
 
