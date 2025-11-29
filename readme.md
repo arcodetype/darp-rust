@@ -4,20 +4,11 @@
 
 This is the Rust Port of this application.
 
-## Missing Features/Fixes
+## Image add-ons
 
-- let's cleanly separate out the logic for whichever OS we are working with
-- dynamically show only one of these
-    - darp uninstall (hidde if not installed)
-    - darp install (hidden if installed)
-- close container on disconnected TTY shell situation (exiting VSCode or closing the terminal)
-- not 100% sure but it may be the case that different images will exit differently (different status codes 
-    - we may need to have a way to understand this)
-- cleaner CLI experience
-
-## CLI Reference
-
-[cli-reference.md](cli-reference.md) (TODO)
+```sh
+apk add --no-cache build-base
+```
 
 ## Tutorial
 
@@ -32,9 +23,9 @@ This tutorial takes you through running a simple Go API with darp.
 Initialize darp and configure a folder to be reverse-proxied:
 
 ```sh
-darp init
-darp set engine docker
-darp add domain ~/projects
+darp install
+darp config set engine docker
+darp config add domain ~/projects
 darp mkdir ~/projects/hello-world
 darp deploy
 darp urls
@@ -87,7 +78,7 @@ air init
 
 Different tech stacks will use different serve commands. For this example, we'll use Air:
 
-> Note: Updating values via `darp add`, `darp set`, and `darp rm` automatically updates `~/.darp/config.json`. Advanced users may edit this file manually, but using darp commands is recommended.
+> Note: Updating values via `darp config add`, `darp config set`, and `darp config rm` automatically updates `~/.darp/config.json`. Advanced users may edit this file manually, but using darp commands is recommended.
 
 #### Requirements for `darp serve`
 
@@ -95,8 +86,7 @@ Different tech stacks will use different serve commands. For this example, we'll
 
 Configure and run:
 ```sh
-darp add environment go
-darp set serve_command go 'air'
+darp set env serve_command go 'air'
 darp serve -e go darp-go
 ```
 
@@ -105,7 +95,7 @@ Now test the endpoint from another terminal:
 curl http://hello-world.projects.test
 ```
 
-> Note: If your endpoint is unresponsive, try `darp set urls_in_hosts True`. It's possible that the `darp-masq` image is not resolving correctly. After turning on, a computer password will be required on future runs of the `darp deploy` command.
+> Note: If your endpoint is unresponsive, try `darp config set urls_in_hosts True`. It's possible that the `darp-masq` image is not resolving correctly. After turning on, a computer password will be required on future runs of the `darp deploy` command.
 
 Try editing files inside the hello-world project directory in your editor:
 
