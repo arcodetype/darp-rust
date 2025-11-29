@@ -1,6 +1,6 @@
 # darp
 
-`darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-r<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
+`darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
 
 This is the Rust Port of this application.
 
@@ -26,10 +26,11 @@ This tutorial takes you through running a simple Go API with darp.
 Initialize darp and configure a folder to be reverse-proxied:
 
 ```sh
+darp mkdir ~/projects/
+darp mkdir ~/projects/hello-world/
 darp install
 darp config set engine docker
 darp config add domain ~/projects
-darp mkdir ~/projects/hello-world
 darp deploy
 darp urls
 ```
@@ -89,7 +90,7 @@ Different tech stacks will use different serve commands. For this example, we'll
 
 Configure and run:
 ```sh
-darp set env serve_command go 'air'
+darp config set env serve_command go 'air'
 darp serve -e go darp-go
 ```
 
