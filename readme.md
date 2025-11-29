@@ -26,8 +26,8 @@ This tutorial takes you through running a simple Go API with darp.
 Initialize darp and configure a folder to be reverse-proxied:
 
 ```sh
-darp mkdir ~/projects/
-darp mkdir ~/projects/hello-world/
+mkdir ~/projects/
+mkdir ~/projects/hello-world/
 darp install
 darp config set engine docker
 darp config add domain ~/projects
