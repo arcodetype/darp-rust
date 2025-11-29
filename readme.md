@@ -9,7 +9,7 @@ This is the Rust Port of this application.
 ### Mac
 
 ```
-carbo build --release
+cargo build --release
 sudo cp ./target/release/darp /usr/local/bin/darp 
 ```
 
