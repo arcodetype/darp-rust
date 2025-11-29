@@ -63,6 +63,12 @@ pub struct Domain {
 pub struct Service {
     #[serde(default)]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub volumes: Option<Vec<Volume>>,
+    #[serde(default)]
+    pub serve_command: Option<String>,
+    #[serde(default)]
+    pub image_repository: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -73,6 +79,8 @@ pub struct Environment {
     pub serve_command: Option<String>,
     #[serde(default)]
     pub image_repository: Option<String>,
+    #[serde(default)]
+    pub host_portmappings: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,10 +117,7 @@ impl Config {
         let v = s.trim().to_lowercase();
         match v.as_str() {
             "true" | "1" | "yes" | "y" | "on" => Ok(true),
-            "false" | "0" | "no" | "n" | "off" => Err(anyhow!(
-                "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
-                s
-            )),
+            "false" | "0" | "no" | "n" | "off" => Ok(false),
             _ => Err(anyhow!(
                 "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
                 s
@@ -131,8 +136,14 @@ impl Config {
     pub fn resolve_image_name(
         &self,
         environment: Option<&Environment>,
+        service: Option<&Service>,
         cli_image: &str,
     ) -> String {
+        if let Some(svc) = service {
+            if let Some(repo) = &svc.image_repository {
+                return format!("{repo}:{image}", repo = repo, image = cli_image);
+            }
+        }
         if let Some(env) = environment {
             if let Some(repo) = &env.image_repository {
                 return format!("{repo}:{image}", repo = repo, image = cli_image);
@@ -233,6 +244,8 @@ impl Config {
         Ok(())
     }
 
+    // Environment-level serve_command
+
     pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
         let env = self
             .environments
@@ -262,6 +275,8 @@ impl Config {
         Ok(())
     }
 
+    // Environment-level image_repository
+
     pub fn set_image_repository(&mut self, env_name: &str, repo: &str) -> Result<()> {
         let env = self
             .environments
@@ -290,6 +305,8 @@ impl Config {
         env.image_repository = None;
         Ok(())
     }
+
+    // Service-level port mappings (existing behavior)
 
     pub fn add_portmap(
         &mut self,
@@ -380,6 +397,77 @@ impl Config {
         Ok(())
     }
 
+    // Environment-level port mappings
+
+    pub fn add_env_portmap(
+        &mut self,
+        env_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let env = envs
+            .get_mut(env_name)
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        let maps = env
+            .host_portmappings
+            .get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Portmapping on host side for environment '{}' ({}:____) already exists",
+                env_name,
+                host_port
+            ));
+        }
+
+        maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created portmapping for environment '{}' ({}:{})",
+            env_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_env_portmap(
+        &mut self,
+        env_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let env = envs
+            .get_mut(env_name)
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        let maps = env
+            .host_portmappings
+            .as_mut()
+            .ok_or_else(|| anyhow!("No host_portmappings configured for environment '{}'", env_name))?;
+
+        if maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Portmapping on host side for environment '{}' ({}:____) does not exist",
+                env_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed portmapping for environment '{}' ({}:____)",
+            env_name, host_port
+        );
+        Ok(())
+    }
+
+    // Environment-level volumes
+
     pub fn add_volume(
         &mut self,
         env_name: &str,
@@ -455,6 +543,228 @@ impl Config {
             "Removed volume from environment '{}': {} -> {}",
             env_name, host_dir, container_dir
         );
+        Ok(())
+    }
+
+    // Service-level volumes
+
+    pub fn add_service_volume(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        let vols = svc.volumes.get_or_insert_with(Vec::new);
+
+        let new_vol = Volume {
+            container: container_dir.to_string(),
+            host: host_dir.to_string(),
+        };
+
+        if vols
+            .iter()
+            .any(|v| v.container == new_vol.container && v.host == new_vol.host)
+        {
+            return Err(anyhow!(
+                "Volume mapping already exists for service '{}.{}': {} -> {}",
+                domain_name,
+                service_name,
+                new_vol.host,
+                new_vol.container
+            ));
+        }
+
+        vols.push(new_vol);
+        println!(
+            "Added volume to service '{}.{}': {} -> {}",
+            domain_name, service_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
+    pub fn rm_service_volume(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        let vols = svc
+            .volumes
+            .as_mut()
+            .ok_or_else(|| anyhow!("No volumes configured for service '{}.{}'", domain_name, service_name))?;
+
+        let before = vols.len();
+        vols.retain(|v| !(v.container == container_dir && v.host == host_dir));
+
+        if vols.len() == before {
+            return Err(anyhow!(
+                "No matching volume found in service '{}.{}' for host '{}' -> container '{}'",
+                domain_name,
+                service_name,
+                host_dir,
+                container_dir
+            ));
+        }
+
+        println!(
+            "Removed volume from service '{}.{}': {} -> {}",
+            domain_name, service_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
+    // Service-level serve_command
+
+    pub fn set_service_serve_command(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        cmd: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.serve_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_serve_command(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.serve_command.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no custom serve_command.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.serve_command = None;
+        Ok(())
+    }
+
+    // Service-level image_repository
+
+    pub fn set_service_image_repository(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        repo: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.image_repository = Some(repo.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_image_repository(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.image_repository.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no custom image_repository.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.image_repository = None;
         Ok(())
     }
 }

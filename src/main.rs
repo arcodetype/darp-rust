@@ -61,17 +61,17 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum ConfigCommand {
-    /// Set config values / environment options
+    /// Set values in config
     Set {
         #[command(subcommand)]
         cmd: SetCommand,
     },
-    /// Add things to config
+    /// Add to config
     Add {
         #[command(subcommand)]
         cmd: AddCommand,
     },
-    /// Remove things from config
+    /// Remove from config
     Rm {
         #[command(subcommand)]
         cmd: RmCommand,
@@ -84,24 +84,54 @@ enum SetCommand {
     Engine {
         engine: String,
     },
-    /// Set image_repository on an environment
-    ImageRepository {
-        environment: String,
-        image_repository: String,
+    /// Set image_repository / serve_command on an environment
+    Env {
+        #[command(subcommand)]
+        cmd: SetEnvCommand,
+    },
+    /// Set image_repository / serve_command on a service
+    Svc {
+        #[command(subcommand)]
+        cmd: SetSvcCommand,
     },
     /// Set Podman machine name
     PodmanMachine {
         /// Name of the Podman machine to use (e.g. 'podman-machine-default')
         new_podman_machine: String,
     },
+    /// Enable/disable mirroring URLs into /etc/hosts
+    UrlsInHosts {
+        value: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SetEnvCommand {
+    /// Set image_repository on an environment
+    ImageRepository {
+        environment: String,
+        image_repository: String,
+    },
     /// Set serve_command on an environment
     ServeCommand {
         environment: String,
         serve_command: String,
     },
-    /// Enable/disable mirroring URLs into /etc/hosts
-    UrlsInHosts {
-        value: String,
+}
+
+#[derive(Subcommand, Debug)]
+enum SetSvcCommand {
+    /// Set image_repository on a service
+    ImageRepository {
+        domain_name: String,
+        service_name: String,
+        image_repository: String,
+    },
+    /// Set serve_command on a service
+    ServeCommand {
+        domain_name: String,
+        service_name: String,
+        serve_command: String,
     },
 }
 
@@ -116,6 +146,36 @@ enum AddCommand {
     Environment {
         name: String,
     },
+    /// Add environment-scoped configuration (volumes, port mappings)
+    Env {
+        #[command(subcommand)]
+        cmd: AddEnvCommand,
+    },
+    /// Add service-scoped configuration (volumes, port mappings)
+    Svc {
+        #[command(subcommand)]
+        cmd: AddSvcCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AddEnvCommand {
+    /// Add port mapping to an environment
+    Portmap {
+        environment: String,
+        host_port: String,
+        container_port: String,
+    },
+    /// Add volume to an environment
+    Volume {
+        environment: String,
+        container_dir: String,
+        host_dir: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AddSvcCommand {
     /// Add port mapping to a service
     Portmap {
         domain_name: String,
@@ -123,9 +183,10 @@ enum AddCommand {
         host_port: String,
         container_port: String,
     },
-    /// Add volume to an environment
+    /// Add volume to a service
     Volume {
-        environment: String,
+        domain_name: String,
+        service_name: String,
         container_dir: String,
         host_dir: String,
     },
@@ -142,28 +203,67 @@ enum RmCommand {
     Environment {
         name: String,
     },
-    /// Remove image_repository from an environment
-    ImageRepository {
-        environment: String,
-    },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
-    /// Remove port mapping from a service
-    Portmap {
-        domain_name: String,
-        service_name: String,
-        host_port: String,
-        container_port: Option<String>,
+    /// Remove environment-scoped configuration
+    Env {
+        #[command(subcommand)]
+        cmd: RmEnvCommand,
     },
-    /// Remove serve_command from an environment
-    ServeCommand {
+    /// Remove service-scoped configuration
+    Svc {
+        #[command(subcommand)]
+        cmd: RmSvcCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RmEnvCommand {
+    /// Remove port mapping from an environment
+    Portmap {
         environment: String,
+        host_port: String,
     },
     /// Remove volume from an environment
     Volume {
         environment: String,
         container_dir: String,
         host_dir: String,
+    },
+    /// Remove serve_command from an environment
+    ServeCommand {
+        environment: String,
+    },
+    /// Remove image_repository from an environment
+    ImageRepository {
+        environment: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RmSvcCommand {
+    /// Remove port mapping from a service
+    Portmap {
+        domain_name: String,
+        service_name: String,
+        host_port: String,
+    },
+    /// Remove volume from a service
+    Volume {
+        domain_name: String,
+        service_name: String,
+        container_dir: String,
+        host_dir: String,
+    },
+    /// Remove serve_command from a service
+    ServeCommand {
+        domain_name: String,
+        service_name: String,
+    },
+    /// Remove image_repository from a service
+    ImageRepository {
+        domain_name: String,
+        service_name: String,
     },
 }
 
@@ -640,6 +740,11 @@ fn cmd_shell(
             std::process::exit(1);
         });
 
+    let service_opt = domain
+        .services
+        .as_ref()
+        .and_then(|s| s.get(&current_directory_name));
+
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_interactive(&container_name);
@@ -661,25 +766,61 @@ fn cmd_shell(
             paths.vhost_container_conf.display()
         ));
 
-    if let Some(env) = env.as_ref() {
-        for v in env.volumes.iter().flatten() {
-            let host = config.resolve_host_path(&v.host, &current_dir)?;
-            if !host.exists() {
-                eprintln!("Volume {} does not appear to exist.", v.host);
-                std::process::exit(1);
+    // Volumes: service-level volumes override environment-level volumes
+    if let Some(service) = service_opt {
+        if let Some(vols) = service.volumes.as_ref() {
+            for v in vols {
+                let host = config.resolve_host_path(&v.host, &current_dir)?;
+                if !host.exists() {
+                    eprintln!("Volume {} does not appear to exist.", v.host);
+                    std::process::exit(1);
+                }
+                cmd.arg("-v")
+                    .arg(format!("{}:{}", host.display(), v.container));
             }
-            cmd.arg("-v")
-                .arg(format!("{}:{}", host.display(), v.container));
+        } else if let Some(env) = env.as_ref() {
+            if let Some(vols) = env.volumes.as_ref() {
+                for v in vols {
+                    let host = config.resolve_host_path(&v.host, &current_dir)?;
+                    if !host.exists() {
+                        eprintln!("Volume {} does not appear to exist.", v.host);
+                        std::process::exit(1);
+                    }
+                    cmd.arg("-v")
+                        .arg(format!("{}:{}", host.display(), v.container));
+                }
+            }
+        }
+    } else if let Some(env) = env.as_ref() {
+        if let Some(vols) = env.volumes.as_ref() {
+            for v in vols {
+                let host = config.resolve_host_path(&v.host, &current_dir)?;
+                if !host.exists() {
+                    eprintln!("Volume {} does not appear to exist.", v.host);
+                    std::process::exit(1);
+                }
+                cmd.arg("-v")
+                    .arg(format!("{}:{}", host.display(), v.container));
+            }
         }
     }
 
-    // Host port mappings
-    if let Some(pm) = domain
-        .services
-        .as_ref()
-        .and_then(|s| s.get(&current_directory_name))
-        .and_then(|service| service.host_portmappings.as_ref())
-    {
+    // Host port mappings: service-level overrides environment-level
+    let host_portmaps = if let Some(service) = service_opt {
+        if let Some(m) = service.host_portmappings.as_ref() {
+            Some(m)
+        } else if let Some(env) = env.as_ref() {
+            env.host_portmappings.as_ref()
+        } else {
+            None
+        }
+    } else if let Some(env) = env.as_ref() {
+        env.host_portmappings.as_ref()
+    } else {
+        None
+    };
+
+    if let Some(pm) = host_portmaps {
         for (host_port, container_port) in pm {
             cmd.arg("-p")
                 .arg(format!("{host}:{container}", host = host_port, container = container_port));
@@ -705,7 +846,7 @@ fn cmd_shell(
     cmd.arg("-p")
         .arg(format!("{}:8000", rev_proxy_port));
 
-    let image_name = config.resolve_image_name(env.as_ref(), &container_image);
+    let image_name = config.resolve_image_name(env.as_ref(), service_opt, &container_image);
 
     let inner_cmd = r#"if command -v nginx >/dev/null 2>&1; then
     echo "Starting nginx..."; nginx;
@@ -741,14 +882,6 @@ fn cmd_serve(
             std::process::exit(1);
         });
 
-    let serve_command = env.serve_command.as_deref().unwrap_or_else(|| {
-        eprintln!(
-            "Environment '{}' has no serve_command. Use 'darp set serve_command' first.",
-            environment_name
-        );
-        std::process::exit(1);
-    });
-
     let current_dir = std::env::current_dir()?;
     let current_directory_name = current_dir
         .file_name()
@@ -774,6 +907,30 @@ fn cmd_serve(
             std::process::exit(1);
         });
 
+    let service_opt = domain
+        .services
+        .as_ref()
+        .and_then(|s| s.get(&current_directory_name));
+
+    // Effective serve_command: service overrides environment
+    let serve_command = service_opt
+        .and_then(|svc| svc.serve_command.as_deref())
+        .or_else(|| env.serve_command.as_deref())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "Neither service '{}.{}' nor environment '{}' has a serve_command configured.\n\
+                 Use 'darp config set svc serve_command {} {} <cmd>' or \
+'darp config set env serve_command {} <cmd>' first.",
+                domain_name,
+                current_directory_name,
+                environment_name,
+                domain_name,
+                current_directory_name,
+                environment_name,
+            );
+            std::process::exit(1);
+        });
+
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_noninteractive(&container_name);
@@ -795,23 +952,55 @@ fn cmd_serve(
             paths.vhost_container_conf.display()
         ));
 
-    for v in env.volumes.iter().flatten() {
-        let host = config.resolve_host_path(&v.host, &current_dir)?;
-        if !host.exists() {
-            eprintln!("Volume {} does not appear to exist.", v.host);
-            std::process::exit(1);
+    // Volumes: service-level override environment-level
+    if let Some(service) = service_opt {
+        if let Some(vols) = service.volumes.as_ref() {
+            for v in vols {
+                let host = config.resolve_host_path(&v.host, &current_dir)?;
+                if !host.exists() {
+                    eprintln!("Volume {} does not appear to exist.", v.host);
+                    std::process::exit(1);
+                }
+                cmd.arg("-v")
+                    .arg(format!("{}:{}", host.display(), v.container));
+            }
+        } else if let Some(vols) = env.volumes.as_ref() {
+            for v in vols {
+                let host = config.resolve_host_path(&v.host, &current_dir)?;
+                if !host.exists() {
+                    eprintln!("Volume {} does not appear to exist.", v.host);
+                    std::process::exit(1);
+                }
+                cmd.arg("-v")
+                    .arg(format!("{}:{}", host.display(), v.container));
+            }
         }
-        cmd.arg("-v")
-            .arg(format!("{}:{}", host.display(), v.container));
+    } else if let Some(vols) = env.volumes.as_ref() {
+        for v in vols {
+            let host = config.resolve_host_path(&v.host, &current_dir)?;
+            if !host.exists() {
+                eprintln!("Volume {} does not appear to exist.", v.host);
+                std::process::exit(1);
+            }
+            cmd.arg("-v")
+                .arg(format!("{}:{}", host.display(), v.container));
+        }
     }
 
-    // Host port mappings
-    if let Some(pm) = domain
-        .services
-        .as_ref()
-        .and_then(|s| s.get(&current_directory_name))
-        .and_then(|service| service.host_portmappings.as_ref())
-    {
+    // Host port mappings: service-level overrides environment-level
+    let host_portmaps = if let Some(service) = service_opt {
+        if let Some(m) = service.host_portmappings.as_ref() {
+            Some(m)
+        } else if let Some(m) = env.host_portmappings.as_ref() {
+            Some(m)
+        } else {
+            None
+        }
+    } else {
+        env.host_portmappings.as_ref()
+    };
+
+    if let Some(pm) = host_portmaps {
         for (host_port, container_port) in pm {
             cmd.arg("-p")
                 .arg(format!("{host}:{container}", host = host_port, container = container_port));
@@ -837,7 +1026,7 @@ fn cmd_serve(
     cmd.arg("-p")
         .arg(format!("{}:8000", rev_proxy_port));
 
-    let image_name = config.resolve_image_name(Some(env), &container_image);
+    let image_name = config.resolve_image_name(Some(env), service_opt, &container_image);
 
     let inner_cmd = format!(
         r#"if command -v nginx >/dev/null 2>&1; then
@@ -884,28 +1073,60 @@ fn cmd_set(
             config.save(&paths.config_path)?;
             println!("Engine set. New Darp invocations will use this container engine.");
         }
-        SetCommand::ImageRepository {
-            environment,
-            image_repository,
-        } => {
-            config.set_image_repository(&environment, &image_repository)?;
-            config.save(&paths.config_path)?;
-            println!(
-                "Set image_repository for environment '{}' to:\n  {}",
-                environment, image_repository
-            );
-        }
-        SetCommand::ServeCommand {
-            environment,
-            serve_command,
-        } => {
-            config.set_serve_command(&environment, &serve_command)?;
-            config.save(&paths.config_path)?;
-            println!(
-                "Set serve_command for environment '{}' to:\n  {}",
-                environment, serve_command
-            );
-        }
+        SetCommand::Env { cmd } => match cmd {
+            SetEnvCommand::ImageRepository {
+                environment,
+                image_repository,
+            } => {
+                config.set_image_repository(&environment, &image_repository)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set image_repository for environment '{}' to:\n  {}",
+                    environment, image_repository
+                );
+            }
+            SetEnvCommand::ServeCommand {
+                environment,
+                serve_command,
+            } => {
+                config.set_serve_command(&environment, &serve_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set serve_command for environment '{}' to:\n  {}",
+                    environment, serve_command
+                );
+            }
+        },
+        SetCommand::Svc { cmd } => match cmd {
+            SetSvcCommand::ImageRepository {
+                domain_name,
+                service_name,
+                image_repository,
+            } => {
+                config.set_service_image_repository(
+                    &domain_name,
+                    &service_name,
+                    &image_repository,
+                )?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set image_repository for service '{}.{}' to:\n  {}",
+                    domain_name, service_name, image_repository
+                );
+            }
+            SetSvcCommand::ServeCommand {
+                domain_name,
+                service_name,
+                serve_command,
+            } => {
+                config.set_service_serve_command(&domain_name, &service_name, &serve_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set serve_command for service '{}.{}' to:\n  {}",
+                    domain_name, service_name, serve_command
+                );
+            }
+        },
         SetCommand::UrlsInHosts { value } => {
             let v = config.parse_bool(&value)?;
             config.urls_in_hosts = Some(v);
@@ -932,23 +1153,44 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
             config.add_environment(&name)?;
             config.save(&paths.config_path)?;
         }
-        AddCommand::Portmap {
-            domain_name,
-            service_name,
-            host_port,
-            container_port,
-        } => {
-            config.add_portmap(&domain_name, &service_name, &host_port, &container_port)?;
-            config.save(&paths.config_path)?;
-        }
-        AddCommand::Volume {
-            environment,
-            container_dir,
-            host_dir,
-        } => {
-            config.add_volume(&environment, &container_dir, &host_dir)?;
-            config.save(&paths.config_path)?;
-        }
+        AddCommand::Env { cmd } => match cmd {
+            AddEnvCommand::Portmap {
+                environment,
+                host_port,
+                container_port,
+            } => {
+                config.add_env_portmap(&environment, &host_port, &container_port)?;
+                config.save(&paths.config_path)?;
+            }
+            AddEnvCommand::Volume {
+                environment,
+                container_dir,
+                host_dir,
+            } => {
+                config.add_volume(&environment, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+        },
+        AddCommand::Svc { cmd } => match cmd {
+            AddSvcCommand::Portmap {
+                domain_name,
+                service_name,
+                host_port,
+                container_port,
+            } => {
+                config.add_portmap(&domain_name, &service_name, &host_port, &container_port)?;
+                config.save(&paths.config_path)?;
+            }
+            AddSvcCommand::Volume {
+                domain_name,
+                service_name,
+                container_dir,
+                host_dir,
+            } => {
+                config.add_service_volume(&domain_name, &service_name, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+        },
     }
 
     Ok(())
@@ -973,31 +1215,64 @@ fn cmd_rm(
             config.rm_environment(&name)?;
             config.save(&paths.config_path)?;
         }
-        RmCommand::ImageRepository { environment } => {
-            config.rm_image_repository(&environment)?;
-            config.save(&paths.config_path)?;
-        }
-        RmCommand::Portmap {
-            domain_name,
-            service_name,
-            host_port,
-            ..
-        } => {
-            config.rm_portmap(&domain_name, &service_name, &host_port)?;
-            config.save(&paths.config_path)?;
-        }
-        RmCommand::Volume {
-            environment,
-            container_dir,
-            host_dir,
-        } => {
-            config.rm_volume(&environment, &container_dir, &host_dir)?;
-            config.save(&paths.config_path)?;
-        }
-        RmCommand::ServeCommand { environment } => {
-            config.rm_serve_command(&environment)?;
-            config.save(&paths.config_path)?;
-        }
+        RmCommand::Env { cmd } => match cmd {
+            RmEnvCommand::Portmap {
+                environment,
+                host_port,
+            } => {
+                config.rm_env_portmap(&environment, &host_port)?;
+                config.save(&paths.config_path)?;
+            }
+            RmEnvCommand::Volume {
+                environment,
+                container_dir,
+                host_dir,
+            } => {
+                config.rm_volume(&environment, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+            RmEnvCommand::ServeCommand { environment } => {
+                config.rm_serve_command(&environment)?;
+                config.save(&paths.config_path)?;
+            }
+            RmEnvCommand::ImageRepository { environment } => {
+                config.rm_image_repository(&environment)?;
+                config.save(&paths.config_path)?;
+            }
+        },
+        RmCommand::Svc { cmd } => match cmd {
+            RmSvcCommand::Portmap {
+                domain_name,
+                service_name,
+                host_port,
+            } => {
+                config.rm_portmap(&domain_name, &service_name, &host_port)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::Volume {
+                domain_name,
+                service_name,
+                container_dir,
+                host_dir,
+            } => {
+                config.rm_service_volume(&domain_name, &service_name, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::ServeCommand {
+                domain_name,
+                service_name,
+            } => {
+                config.rm_service_serve_command(&domain_name, &service_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::ImageRepository {
+                domain_name,
+                service_name,
+            } => {
+                config.rm_service_image_repository(&domain_name, &service_name)?;
+                config.save(&paths.config_path)?;
+            }
+        },
     }
 
     Ok(())
