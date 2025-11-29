@@ -719,7 +719,7 @@ cd /app; exec sh"#;
 
     cmd.arg(&image_name).arg("sh").arg("-c").arg(inner_cmd);
 
-    engine.run_container_interactive(cmd, &container_name, &[137])?;
+    engine.run_container_interactive(cmd, &container_name, &[])?;
     Ok(())
 }
 
@@ -851,7 +851,7 @@ cd /app; {serve}"#,
 
     cmd.arg(&image_name).arg("sh").arg("-c").arg(inner_cmd);
 
-    engine.run_container_interactive(cmd, &container_name, &[0, 2])?;
+    engine.run_container_interactive(cmd, &container_name, &[])?;
     Ok(())
 }
 
