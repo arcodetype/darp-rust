@@ -35,11 +35,11 @@ enum Command {
     },
     /// Generates domains and starts reverse proxy
     Deploy,
-    /// Runs the environment serve_command
+    /// Runs the environment serve_command (uses domain default_environment if set)
     Serve {
-        /// Environment name (required)
+        /// Environment name (optional; falls back to domain default_environment if configured)
         #[arg(short, long)]
-        environment: String,
+        environment: Option<String>,
         /// Container image to use (optional if default_container_image is configured)
         container_image: Option<String>,
     },
@@ -1059,22 +1059,13 @@ cd /app; exec sh"#;
 }
 
 fn cmd_serve(
-    environment_name: String,
+    environment_cli: Option<String>,
     container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
     engine: &Engine,
 ) -> anyhow::Result<()> {
     engine.require_ready()?;
-
-    let env = config
-        .environments
-        .as_ref()
-        .and_then(|e| e.get(&environment_name))
-        .unwrap_or_else(|| {
-            eprintln!("Environment '{}' does not exist.", environment_name);
-            std::process::exit(1);
-        });
 
     let current_dir = std::env::current_dir()?;
     let current_directory_name = current_dir
@@ -1106,6 +1097,32 @@ fn cmd_serve(
         .as_ref()
         .and_then(|s| s.get(&current_directory_name));
 
+    // Resolve environment: CLI value first, then domain.default_environment
+    let effective_env_name = environment_cli.or_else(|| domain.default_environment.clone());
+
+    let environment_name = match effective_env_name {
+        Some(name) => name,
+        None => {
+            eprintln!(
+                "Environment is required for 'darp serve' in domain '{}'.\n\
+Either pass an explicit environment:\n  darp serve --environment <env>\n\
+or configure a default_environment for this domain:\n  darp config set dom default-environment {} <env>",
+                domain_name,
+                domain_name
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let env = config
+        .environments
+        .as_ref()
+        .and_then(|e| e.get(&environment_name))
+        .unwrap_or_else(|| {
+            eprintln!("Environment '{}' does not exist.", environment_name);
+            std::process::exit(1);
+        });
+
     // Effective serve_command: service overrides environment
     let serve_command = service_opt
         .and_then(|svc| svc.serve_command.as_deref())
@@ -1113,7 +1130,7 @@ fn cmd_serve(
         .unwrap_or_else(|| {
             eprintln!(
                 "Neither service '{}.{}' nor environment '{}' has a serve_command configured.\n\
-                 Use 'darp config set svc serve-command {} {} <cmd>' or \
+Use 'darp config set svc serve-command {} {} <cmd>' or \
 'darp config set env serve-command {} <cmd>' first.",
                 domain_name,
                 current_directory_name,
