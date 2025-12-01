@@ -1,3 +1,4 @@
+// config.rs
 use anyhow::{anyhow, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,8 @@ pub struct Service {
     pub image_repository: Option<String>,
     #[serde(default)]
     pub platform: Option<String>,
+    #[serde(default)]
+    pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -85,6 +88,8 @@ pub struct Environment {
     pub host_portmappings: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub platform: Option<String>,
+    #[serde(default)]
+    pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +126,10 @@ impl Config {
         let v = s.trim().to_lowercase();
         match v.as_str() {
             "true" | "1" | "yes" | "y" | "on" => Ok(true),
-            "false" | "0" | "no" | "n" | "off" => Ok(false),
+            "false" | "0" | "no" | "n" | "off" => Err(anyhow!(
+                "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
+                s
+            )),
             _ => Err(anyhow!(
                 "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
                 s
@@ -187,10 +195,10 @@ impl Config {
         }
 
         if domains.values().any(|d| d.name == domain_name) {
-            return Err(anyhow![
+            return Err(anyhow!(
                 "Domain name '{}' already exists. Domain names must be unique.",
                 domain_name
-            ]);
+            ));
         }
 
         domains.insert(
@@ -316,6 +324,41 @@ impl Config {
         }
 
         env.platform = None;
+        Ok(())
+    }
+
+    // Environment-level default_container_image
+
+    pub fn set_default_container_image(
+        &mut self,
+        env_name: &str,
+        image: &str,
+    ) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.default_container_image = Some(image.to_string());
+        Ok(())
+    }
+
+    pub fn rm_default_container_image(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.default_container_image.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no default_container_image.",
+                env_name
+            ));
+        }
+
+        env.default_container_image = None;
         Ok(())
     }
 
@@ -832,6 +875,66 @@ impl Config {
         }
 
         svc.platform = None;
+        Ok(())
+    }
+
+    // Service-level default_container_image
+
+    pub fn set_service_default_container_image(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        image: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.default_container_image = Some(image.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_default_container_image(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.default_container_image.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no default_container_image.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.default_container_image = None;
         Ok(())
     }
 }

@@ -10,7 +10,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::config::{Config, DarpPaths};
+use crate::config::{Config, DarpPaths, Environment, Service};
 use crate::engine::{Engine, EngineKind};
 use crate::os::OsIntegration;
 
@@ -40,16 +40,16 @@ enum Command {
         /// Environment name (required)
         #[arg(short, long)]
         environment: String,
-        /// Container image to use
-        container_image: String,
+        /// Container image to use (optional if default_container_image is configured)
+        container_image: Option<String>,
     },
     /// Starts a shell instance
     Shell {
         /// Environment name (optional)
         #[arg(short, long)]
         environment: Option<String>,
-        /// Container image to use
-        container_image: String,
+        /// Container image to use (optional if default_container_image is configured)
+        container_image: Option<String>,
     },
     /// List Darp URLs
     Urls,
@@ -84,12 +84,12 @@ enum SetCommand {
     Engine {
         engine: String,
     },
-    /// Set image_repository / serve_command / platform on an environment
+    /// Set image_repository / serve_command / platform / default_container_image on an environment
     Env {
         #[command(subcommand)]
         cmd: SetEnvCommand,
     },
-    /// Set image_repository / serve_command / platform on a service
+    /// Set image_repository / serve_command / platform / default_container_image on a service
     Svc {
         #[command(subcommand)]
         cmd: SetSvcCommand,
@@ -122,6 +122,11 @@ enum SetEnvCommand {
         environment: String,
         platform: String,
     },
+    /// Set default_container_image on an environment (used when no image is passed on the CLI)
+    DefaultContainerImage {
+        environment: String,
+        default_container_image: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -143,6 +148,12 @@ enum SetSvcCommand {
         domain_name: String,
         service_name: String,
         platform: String,
+    },
+    /// Set default_container_image on a service (used when no image is passed on the CLI)
+    DefaultContainerImage {
+        domain_name: String,
+        service_name: String,
+        default_container_image: String,
     },
 }
 
@@ -246,6 +257,10 @@ enum RmEnvCommand {
     Platform {
         environment: String,
     },
+    /// Remove default_container_image from an environment
+    DefaultContainerImage {
+        environment: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -275,6 +290,11 @@ enum RmSvcCommand {
     },
     /// Remove platform architecture from a service
     Platform {
+        domain_name: String,
+        service_name: String,
+    },
+    /// Remove default_container_image from a service
+    DefaultContainerImage {
         domain_name: String,
         service_name: String,
     },
@@ -596,6 +616,67 @@ fn add_platform_args(
     }
 }
 
+/// Resolve the "base" image name to use, applying the precedence:
+/// 1) CLI-provided image
+/// 2) service.default_container_image
+/// 3) environment.default_container_image
+/// If none are set, print a helpful message and exit(1).
+fn resolve_base_image(
+    cli_image: Option<&str>,
+    env: Option<&Environment>,
+    service: Option<&Service>,
+    env_name: Option<&str>,
+    domain_name: &str,
+    service_folder_name: &str,
+    command_name: &str,
+) -> String {
+    if let Some(img) = cli_image {
+        return img.to_string();
+    }
+
+    let from_service = service.and_then(|s| s.default_container_image.as_deref());
+    let from_env = env.and_then(|e| e.default_container_image.as_deref());
+
+    if let Some(img) = from_service.or(from_env) {
+        return img.to_string();
+    }
+
+    match env_name {
+        Some(env_name) => {
+            eprintln!(
+                "No container image provided for '{}.{}' in environment '{}'.\n\
+                 Either pass an explicit image to 'darp {cmd}' or configure a default_container_image:\n\
+                   darp config set svc default-container-image {domain} {service} <image>\n\
+                 or\n\
+                   darp config set env default-container-image {env} <image>",
+                domain_name,
+                service_folder_name,
+                env_name,
+                cmd = command_name,
+                domain = domain_name,
+                service = service_folder_name,
+                env = env_name,
+            );
+        }
+        None => {
+            eprintln!(
+                "No container image provided for '{}.{}'.\n\
+                 Either pass an explicit image to 'darp {cmd}' or configure a default_container_image:\n\
+                   darp config set svc default-container-image {domain} {service} <image>\n\
+                 or\n\
+                   darp config set env default-container-image <env> <image>",
+                domain_name,
+                service_folder_name,
+                cmd = command_name,
+                domain = domain_name,
+                service = service_folder_name,
+            );
+        }
+    }
+
+    std::process::exit(1);
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -749,7 +830,7 @@ fn cmd_deploy(
 
 fn cmd_shell(
     environment_name: Option<String>,
-    container_image: String,
+    container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
     engine: &Engine,
@@ -905,7 +986,17 @@ fn cmd_shell(
     cmd.arg("-p")
         .arg(format!("{}:8000", rev_proxy_port));
 
-    let image_name = config.resolve_image_name(env.as_ref(), service_opt, &container_image);
+    let base_image = resolve_base_image(
+        container_image.as_deref(),
+        env.as_ref(),
+        service_opt,
+        environment_name.as_deref(),
+        &domain_name,
+        &current_directory_name,
+        "shell",
+    );
+
+    let image_name = config.resolve_image_name(env.as_ref(), service_opt, &base_image);
 
     let inner_cmd = r#"if command -v nginx >/dev/null 2>&1; then
     echo "Starting nginx..."; nginx;
@@ -925,7 +1016,7 @@ cd /app; exec sh"#;
 
 fn cmd_serve(
     environment_name: String,
-    container_image: String,
+    container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
     engine: &Engine,
@@ -959,10 +1050,10 @@ fn cmd_serve(
         .and_then(|d| d.get(&parent_directory_key))
         .map(|domain| (domain, domain.name.clone()))
         .unwrap_or_else(|| {
-            eprintln![
+            eprintln!(
                 "domain location '{}' does not exist in darp's domain configuration.",
                 parent_directory_key
-            ];
+            );
             std::process::exit(1);
         });
 
@@ -978,8 +1069,8 @@ fn cmd_serve(
         .unwrap_or_else(|| {
             eprintln!(
                 "Neither service '{}.{}' nor environment '{}' has a serve_command configured.\n\
-                 Use 'darp config set svc serve_command {} {} <cmd>' or \
-'darp config set env serve_command {} <cmd>' first.",
+                 Use 'darp config set svc serve-command {} {} <cmd>' or \
+'darp config set env serve-command {} <cmd>' first.",
                 domain_name,
                 current_directory_name,
                 environment_name,
@@ -1094,7 +1185,17 @@ fn cmd_serve(
     cmd.arg("-p")
         .arg(format!("{}:8000", rev_proxy_port));
 
-    let image_name = config.resolve_image_name(Some(env), service_opt, &container_image);
+    let base_image = resolve_base_image(
+        container_image.as_deref(),
+        Some(env),
+        service_opt,
+        Some(&environment_name),
+        &domain_name,
+        &current_directory_name,
+        "serve",
+    );
+
+    let image_name = config.resolve_image_name(Some(env), service_opt, &base_image);
 
     let inner_cmd = format!(
         r#"if command -v nginx >/dev/null 2>&1; then
@@ -1175,6 +1276,17 @@ fn cmd_set(
                     environment, platform
                 );
             }
+            SetEnvCommand::DefaultContainerImage {
+                environment,
+                default_container_image,
+            } => {
+                config.set_default_container_image(&environment, &default_container_image)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set default_container_image for environment '{}' to:\n  {}",
+                    environment, default_container_image
+                );
+            }
         },
         SetCommand::Svc { cmd } => match cmd {
             SetSvcCommand::ImageRepository {
@@ -1188,10 +1300,10 @@ fn cmd_set(
                     &image_repository,
                 )?;
                 config.save(&paths.config_path)?;
-                println![
+                println!(
                     "Set image_repository for service '{}.{}' to:\n  {}",
                     domain_name, service_name, image_repository
-                ];
+                );
             }
             SetSvcCommand::ServeCommand {
                 domain_name,
@@ -1215,6 +1327,22 @@ fn cmd_set(
                 println!(
                     "Set platform for service '{}.{}' to:\n  {}",
                     domain_name, service_name, platform
+                );
+            }
+            SetSvcCommand::DefaultContainerImage {
+                domain_name,
+                service_name,
+                default_container_image,
+            } => {
+                config.set_service_default_container_image(
+                    &domain_name,
+                    &service_name,
+                    &default_container_image,
+                )?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set default_container_image for service '{}.{}' to:\n  {}",
+                    domain_name, service_name, default_container_image
                 );
             }
         },
@@ -1326,6 +1454,10 @@ fn cmd_rm(
                 config.rm_platform(&environment)?;
                 config.save(&paths.config_path)?;
             }
+            RmEnvCommand::DefaultContainerImage { environment } => {
+                config.rm_default_container_image(&environment)?;
+                config.save(&paths.config_path)?;
+            }
         },
         RmCommand::Svc { cmd } => match cmd {
             RmSvcCommand::Portmap {
@@ -1364,6 +1496,13 @@ fn cmd_rm(
                 service_name,
             } => {
                 config.rm_service_platform(&domain_name, &service_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::DefaultContainerImage {
+                domain_name,
+                service_name,
+            } => {
+                config.rm_service_default_container_image(&domain_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
         },
