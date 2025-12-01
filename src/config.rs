@@ -69,6 +69,8 @@ pub struct Service {
     pub serve_command: Option<String>,
     #[serde(default)]
     pub image_repository: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -81,6 +83,8 @@ pub struct Environment {
     pub image_repository: Option<String>,
     #[serde(default)]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,10 +187,10 @@ impl Config {
         }
 
         if domains.values().any(|d| d.name == domain_name) {
-            return Err(anyhow!(
+            return Err(anyhow![
                 "Domain name '{}' already exists. Domain names must be unique.",
                 domain_name
-            ));
+            ]);
         }
 
         domains.insert(
@@ -281,6 +285,37 @@ impl Config {
         }
 
         env.image_repository = None;
+        Ok(())
+    }
+
+    // Environment-level platform
+
+    pub fn set_platform(&mut self, env_name: &str, platform: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.platform = Some(platform.to_string());
+        Ok(())
+    }
+
+    pub fn rm_platform(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.platform.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no custom platform.",
+                env_name
+            ));
+        }
+
+        env.platform = None;
         Ok(())
     }
 
@@ -737,6 +772,66 @@ impl Config {
         }
 
         svc.image_repository = None;
+        Ok(())
+    }
+
+    // Service-level platform
+
+    pub fn set_service_platform(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        platform: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.platform = Some(platform.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_platform(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.platform.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no custom platform.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.platform = None;
         Ok(())
     }
 }

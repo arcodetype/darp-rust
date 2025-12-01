@@ -84,12 +84,12 @@ enum SetCommand {
     Engine {
         engine: String,
     },
-    /// Set image_repository / serve_command on an environment
+    /// Set image_repository / serve_command / platform on an environment
     Env {
         #[command(subcommand)]
         cmd: SetEnvCommand,
     },
-    /// Set image_repository / serve_command on a service
+    /// Set image_repository / serve_command / platform on a service
     Svc {
         #[command(subcommand)]
         cmd: SetSvcCommand,
@@ -117,6 +117,11 @@ enum SetEnvCommand {
         environment: String,
         serve_command: String,
     },
+    /// Set platform architecture (e.g., linux/amd64) on an environment
+    Platform {
+        environment: String,
+        platform: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -132,6 +137,12 @@ enum SetSvcCommand {
         domain_name: String,
         service_name: String,
         serve_command: String,
+    },
+    /// Set platform architecture (e.g., linux/amd64) on a service
+    Platform {
+        domain_name: String,
+        service_name: String,
+        platform: String,
     },
 }
 
@@ -231,6 +242,10 @@ enum RmEnvCommand {
     ImageRepository {
         environment: String,
     },
+    /// Remove platform architecture from an environment
+    Platform {
+        environment: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -255,6 +270,11 @@ enum RmSvcCommand {
     },
     /// Remove image_repository from a service
     ImageRepository {
+        domain_name: String,
+        service_name: String,
+    },
+    /// Remove platform architecture from a service
+    Platform {
         domain_name: String,
         service_name: String,
     },
@@ -545,6 +565,38 @@ fn uninstall_shell_completions() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Platform helper
+// ---------------------------------------------------------------------------
+
+fn add_platform_args(
+    cmd: &mut std::process::Command,
+    engine: &Engine,
+    platform: &str,
+) {
+    match engine.kind {
+        EngineKind::Docker => {
+            // Docker expects full platform string, e.g. linux/amd64
+            cmd.arg("--platform").arg(platform);
+        }
+        EngineKind::Podman => {
+            // For Podman, map "os/arch" to --os / --arch; if no slash, treat as arch only.
+            let parts: Vec<&str> = platform.split('/').collect();
+            if parts.len() >= 2 {
+                let os = parts[0];
+                let arch = parts[1];
+                cmd.arg("--os").arg(os);
+                cmd.arg("--arch").arg(arch);
+            } else {
+                cmd.arg("--arch").arg(platform);
+            }
+        }
+        EngineKind::None => {
+            // No engine configured; nothing to do here. require_ready will error earlier.
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -820,6 +872,20 @@ fn cmd_shell(
         }
     }
 
+    // Effective platform: service overrides environment
+    let platform = if let Some(service) = service_opt {
+        service
+            .platform
+            .as_deref()
+            .or_else(|| env.as_ref().and_then(|e| e.platform.as_deref()))
+    } else {
+        env.as_ref().and_then(|e| e.platform.as_deref())
+    };
+
+    if let Some(platform) = platform {
+        add_platform_args(&mut cmd, engine, platform);
+    }
+
     // Reverse proxy port
     let portmap: serde_json::Value =
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
@@ -1000,6 +1066,15 @@ fn cmd_serve(
         }
     }
 
+    // Effective platform: service overrides environment
+    let platform = service_opt
+        .and_then(|svc| svc.platform.as_deref())
+        .or_else(|| env.platform.as_deref());
+
+    if let Some(platform) = platform {
+        add_platform_args(&mut cmd, engine, platform);
+    }
+
     // Reverse proxy port
     let portmap: serde_json::Value =
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
@@ -1089,6 +1164,17 @@ fn cmd_set(
                     environment, serve_command
                 );
             }
+            SetEnvCommand::Platform {
+                environment,
+                platform,
+            } => {
+                config.set_platform(&environment, &platform)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set platform for environment '{}' to:\n  {}",
+                    environment, platform
+                );
+            }
         },
         SetCommand::Svc { cmd } => match cmd {
             SetSvcCommand::ImageRepository {
@@ -1117,6 +1203,18 @@ fn cmd_set(
                 println!(
                     "Set serve_command for service '{}.{}' to:\n  {}",
                     domain_name, service_name, serve_command
+                );
+            }
+            SetSvcCommand::Platform {
+                domain_name,
+                service_name,
+                platform,
+            } => {
+                config.set_service_platform(&domain_name, &service_name, &platform)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set platform for service '{}.{}' to:\n  {}",
+                    domain_name, service_name, platform
                 );
             }
         },
@@ -1224,6 +1322,10 @@ fn cmd_rm(
                 config.rm_image_repository(&environment)?;
                 config.save(&paths.config_path)?;
             }
+            RmEnvCommand::Platform { environment } => {
+                config.rm_platform(&environment)?;
+                config.save(&paths.config_path)?;
+            }
         },
         RmCommand::Svc { cmd } => match cmd {
             RmSvcCommand::Portmap {
@@ -1255,6 +1357,13 @@ fn cmd_rm(
                 service_name,
             } => {
                 config.rm_service_image_repository(&domain_name, &service_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::Platform {
+                domain_name,
+                service_name,
+            } => {
+                config.rm_service_platform(&domain_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
         },
