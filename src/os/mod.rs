@@ -146,7 +146,8 @@ impl<'a> OsIntegration<'a> {
                 .arg("tee")
                 .arg(hosts_path)
                 .stdin(Stdio::piped())
-                .stdout(Stdio::inherit())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn()?;
 
             {
