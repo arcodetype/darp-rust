@@ -37,13 +37,7 @@ darp urls
 
 > Note: After creating any new projects inside one of your domains, run `darp deploy` so darp can register a URL for it.
 
-### Step Two: Create Your First "darp compatible" Image
-
-#### Requirements
-
-A darp-compatible image must:
-- Be based on Alpine
-- Have nginx installed
+### Step Two: Create a linux image with nginx installed so that it's "`darp serve` compatible"
 
 ```sh
 cd ~/projects/hello-world
