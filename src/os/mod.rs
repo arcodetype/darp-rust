@@ -4,8 +4,9 @@ use anyhow::{anyhow, Result};
 use colored::*;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::process::{Command, Stdio};
+
+const NGINX_CONF: &str = include_str!("../../assets/nginx.conf");
 
 pub struct OsIntegration<'a> {
     paths: &'a DarpPaths,
@@ -61,14 +62,17 @@ impl<'a> OsIntegration<'a> {
     }
 
     pub fn copy_nginx_conf(&self) -> Result<()> {
-        // Mirrors: cp /usr/local/opt/darp/nginx.conf $DARP_ROOT
-        let src = Path::new("/usr/local/opt/darp/nginx.conf");
-        if !src.exists() {
-            return Err(anyhow!(
-                "Expected nginx.conf at /usr/local/opt/darp/nginx.conf not found"
-            ));
+        // Write embedded nginx.conf to $DARP_ROOT/nginx.conf
+        if let Some(parent) = self.paths.nginx_conf_path.parent() {
+            fs::create_dir_all(parent)?;
         }
-        fs::copy(src, &self.paths.nginx_conf_path)?;
+
+        fs::write(&self.paths.nginx_conf_path, NGINX_CONF)?;
+        println!(
+            "nginx.conf written to {}",
+            self.paths.nginx_conf_path.display()
+        );
+
         Ok(())
     }
 
