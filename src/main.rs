@@ -94,6 +94,11 @@ enum SetCommand {
         #[command(subcommand)]
         cmd: SetSvcCommand,
     },
+    /// Set domain-level properties
+    Dom {
+        #[command(subcommand)]
+        cmd: SetDomCommand,
+    },
     /// Set Podman machine name
     PodmanMachine {
         /// Name of the Podman machine to use (e.g. 'podman-machine-default')
@@ -102,6 +107,17 @@ enum SetCommand {
     /// Enable/disable mirroring URLs into /etc/hosts
     UrlsInHosts {
         value: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SetDomCommand {
+    /// Set default_environment on a domain
+    DefaultEnvironment {
+        /// Logical domain name (e.g. 'my-domain')
+        domain_name: String,
+        /// Environment name to use by default for this domain
+        default_environment: String,
     },
 }
 
@@ -220,6 +236,11 @@ enum RmCommand {
     },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
+    /// Remove domain-level configuration
+    Dom {
+        #[command(subcommand)]
+        cmd: RmDomCommand,
+    },
     /// Remove environment-scoped configuration
     Env {
         #[command(subcommand)]
@@ -229,6 +250,15 @@ enum RmCommand {
     Svc {
         #[command(subcommand)]
         cmd: RmSvcCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RmDomCommand {
+    /// Remove default_environment from a domain
+    DefaultEnvironment {
+        /// Logical domain name (e.g. 'my-domain')
+        domain_name: String,
     },
 }
 
@@ -829,17 +859,13 @@ fn cmd_deploy(
 }
 
 fn cmd_shell(
-    environment_name: Option<String>,
+    environment_cli: Option<String>,
     container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
     engine: &Engine,
 ) -> anyhow::Result<()> {
     engine.require_ready()?;
-
-    let env = environment_name
-        .as_deref()
-        .and_then(|name| config.environments.as_ref()?.get(name).cloned());
 
     let current_dir = std::env::current_dir()?;
     let current_directory_name = current_dir
@@ -865,6 +891,24 @@ fn cmd_shell(
             );
             std::process::exit(1);
         });
+
+    // CLI environment name takes precedence; otherwise fall back to domain.default_environment
+    let effective_env_name: Option<String> =
+        environment_cli.or_else(|| domain.default_environment.clone());
+
+    let env = if let Some(ref env_name) = effective_env_name {
+        let env_opt = config
+            .environments
+            .as_ref()
+            .and_then(|e| e.get(env_name).cloned());
+        if env_opt.is_none() {
+            eprintln!("Environment '{}' does not exist.", env_name);
+            std::process::exit(1);
+        }
+        env_opt
+    } else {
+        None
+    };
 
     let service_opt = domain
         .services
@@ -990,7 +1034,7 @@ fn cmd_shell(
         container_image.as_deref(),
         env.as_ref(),
         service_opt,
-        environment_name.as_deref(),
+        effective_env_name.as_deref(),
         &domain_name,
         &current_directory_name,
         "shell",
@@ -1346,6 +1390,19 @@ fn cmd_set(
                 );
             }
         },
+        SetCommand::Dom { cmd } => match cmd {
+            SetDomCommand::DefaultEnvironment {
+                domain_name,
+                default_environment,
+            } => {
+                config.set_domain_default_environment(&domain_name, &default_environment)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set default_environment for domain '{}' to environment '{}'",
+                    domain_name, default_environment
+                );
+            }
+        },
         SetCommand::UrlsInHosts { value } => {
             let v = config.parse_bool(&value)?;
             config.urls_in_hosts = Some(v);
@@ -1426,6 +1483,13 @@ fn cmd_rm(
             config.rm_domain(&name)?;
             config.save(&paths.config_path)?;
         }
+        RmCommand::Dom { cmd } => match cmd {
+            RmDomCommand::DefaultEnvironment { domain_name } => {
+                config.rm_domain_default_environment(&domain_name)?;
+                config.save(&paths.config_path)?;
+                println!("Removed default_environment for domain '{}'", domain_name);
+            }
+        },
         RmCommand::Env { cmd } => match cmd {
             RmEnvCommand::Portmap {
                 environment,

@@ -58,6 +58,8 @@ pub struct Domain {
     pub name: String,
     #[serde(default)]
     pub services: Option<BTreeMap<String, Service>>,
+    #[serde(default)]
+    pub default_environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -206,6 +208,7 @@ impl Config {
             Domain {
                 name: domain_name.clone(),
                 services: None,
+                default_environment: None,
             },
         );
 
@@ -232,6 +235,56 @@ impl Config {
         } else {
             Err(anyhow!("domain {} does not exist", name))
         }
+    }
+
+    // Domain-level default_environment
+
+    pub fn set_domain_default_environment(
+        &mut self,
+        domain_name: &str,
+        env_name: &str,
+    ) -> Result<()> {
+        // Ensure referenced environment exists
+        let envs = self
+            .environments
+            .as_ref()
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+        if !envs.contains_key(env_name) {
+            return Err(anyhow!("Environment '{}' does not exist.", env_name));
+        }
+
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.default_environment = Some(env_name.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_default_environment(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.default_environment.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no default_environment.",
+                domain_name
+            ));
+        }
+
+        domain.default_environment = None;
+        Ok(())
     }
 
     // Environment-level serve_command
@@ -939,7 +992,7 @@ impl Config {
     }
 }
 
-/// Simple slugifier for domain names:
+//// Simple slugifier for domain names:
 /// - lower-cases
 /// - turns spaces/underscores/dashes into single '-'
 /// - strips leading/trailing '-'
