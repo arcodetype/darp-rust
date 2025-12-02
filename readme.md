@@ -104,3 +104,221 @@ Try editing files inside the hello-world project directory in your editor:
 - Podman: You must edit .air.toml and change
 poll = false → poll = true so changes are detected.
 
+## Example config.json
+
+The following is a robust example showing the convenience afforded by setting up your `~/darp/config.json`. Some of the settings are different for demonstrative purposes.
+
+```sh
+> tree Projects
+
+Projects
+├── admin
+├── analytics
+├── billing-service
+├── dashboard
+├── gateway
+└── user-service
+```
+
+```sh
+> darp urls
+
+arco
+    http://admin.arco.test (50100)
+    http://analytics.arco.test (50101)
+    http://billing-service.arco.test (50102)
+    http://dashboard.arco.test (50103)
+    http://gateway.arco.test (50104)
+    http://user-service.arco.test (50105)
+```
+
+The following darp commands simplify down to this docker equivalent based on the `config.json`.
+
+<table>
+<tr>
+<td>darp command</td><td>equivalent docker command</td>
+</tr>
+<tr>
+<td>
+
+```sh
+# cd ~/Projects/admin directory
+darp shell
+```
+
+</td>
+<td>
+
+```sh
+docker run --rm -it -p 50100:8000 -p 8082:8082 \
+    -v /Users/arco/.darp/hosts_container:/etc/hosts \
+    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
+    -v /Users/arco/Projects/admin:/app \
+    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
+    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
+    -v /Users/arco/.gitconfig:/root/.gitconfig \
+    -v /Users/arco/.ssh/:/root/.ssh/ \
+    git.arco.com:4567/php/master:php:83fpm bash
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```sh
+# cd ~/Projects/admin
+darp serve
+```
+
+</td>
+<td>
+
+```sh
+docker run --rm -it -p 50100:8000 -p 8082:8082 \
+    -v /Users/arco/.darp/hosts_container:/etc/hosts \
+    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
+    -v /Users/arco/Projects/admin:/app \
+    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
+    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
+    -v /Users/arco/.gitconfig:/root/.gitconfig \
+    -v /Users/arco/.ssh/:/root/.ssh/ \
+    git.arco.com:4567/php/master:php:83fpm "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot"
+```
+
+</td>
+</tr>
+</tr>
+<tr>
+<td>
+
+```sh
+# cd ~/Projects/billing-service
+darp shell
+```
+
+</td>
+<td>
+
+```sh
+docker run --rm -it -p 50102:8000 \
+    --platform linux/amd64 \
+    -v /Users/arco/.darp/hosts_container:/etc/hosts \
+    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
+    -v /Users/arco/Projects/admin:/app \
+    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
+    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
+    -v /Users/arco/.gitconfig:/root/.gitconfig \
+    -v /Users/arco/.ssh/:/root/.ssh/ \
+    git.arco.com:4567/php/master:php:83 bash
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+```sh
+# cd ~/Projects/billing-service
+darp serve
+```
+
+</td>
+<td>
+
+```sh
+docker run --rm -it -p 50102:8000 -p 8082:8082 \
+    --platform linux/amd64 \
+    -v /Users/arco/.darp/hosts_container:/etc/hosts \
+    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
+    -v /Users/arco/Projects/admin:/app \
+    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
+    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
+    -v /Users/arco/.gitconfig:/root/.gitconfig \
+    -v /Users/arco/.ssh/:/root/.ssh/ \
+    git.arco.com:4567/php/master:php:83 "php artisan serve --host 0.0.0.0"
+```
+
+</td>
+</tr>
+</table>
+
+And finally, the `config.json`
+
+```json
+{
+  "engine": "docker",
+  "domains": {
+    "/Users/arco/Projects": {
+      "name": "arco",
+      "services": {
+        "admin": {
+          "serve_command": "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot",
+          "host_portmappings": {
+            "8082": "8082"
+          },
+          "default_container_image": "php:83fpm"
+        },
+        "dashboard": {
+          "serve_command": "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot",
+          "host_portmappings": {
+            "8081": "8081"
+          },
+          "default_container_image": "php:83fpm"
+        }
+      },
+      "default_environment": "lara:11"
+    }
+  },
+  "environments": {
+    "lara:11": {
+      "volumes": [
+        {
+          "container": "/root/.composer/auth.json",
+          "host": "{home}/.composer/auth.json"
+        },
+        {
+          "container": "/etc/php83/php.ini",
+          "host": "{pwd}/deploy/conf/php.ini"
+        },
+        {
+          "container": "/root/.gitconfig",
+          "host": "{home}/.gitconfig"
+        },
+        {
+          "container": "/root/.ssh",
+          "host": "{home}/.ssh"
+        }
+      ],
+      "serve_command": "php artisan serve --host 0.0.0.0",
+      "shell_command": "bash",
+      "image_repository": "git.arco.com:4567/php/master",
+      "default_container_image": "php:83",
+      "platform": "linux/amd64"
+    },
+    "laravue:11": {
+      "volumes": [
+        {
+          "container": "/root/.composer/auth.json",
+          "host": "{home}/.composer/auth.json"
+        },
+        {
+          "container": "/etc/php83/php.ini",
+          "host": "{pwd}/deploy/conf/php.ini"
+        },
+        {
+          "container": "/root/.gitconfig",
+          "host": "{home}/.gitconfig"
+        },
+        {
+          "container": "/root/.ssh",
+          "host": "{home}/.ssh"
+        }
+      ],
+      "image_repository": "git.arco.com:4567/php/master",
+    }
+  }
+}
+```
+
+> Note: When default settings are used and there's a conflict, `command line arguments` override `services` which override `environments`.
