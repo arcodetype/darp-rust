@@ -1,3 +1,4 @@
+// main.rs
 mod config;
 mod engine;
 mod os;
@@ -43,7 +44,7 @@ enum Command {
         /// Container image to use (optional if default_container_image is configured)
         container_image: Option<String>,
     },
-    /// Starts a shell instance
+    /// Starts a shell instance (uses service/environment shell_command if set, otherwise 'sh')
     Shell {
         /// Environment name (optional)
         #[arg(short, long)]
@@ -84,12 +85,12 @@ enum SetCommand {
     Engine {
         engine: String,
     },
-    /// Set image_repository / serve_command / platform / default_container_image on an environment
+    /// Set image_repository / serve_command / shell_command / platform / default_container_image on an environment
     Env {
         #[command(subcommand)]
         cmd: SetEnvCommand,
     },
-    /// Set image_repository / serve_command / platform / default_container_image on a service
+    /// Set image_repository / serve_command / shell_command / platform / default_container_image on a service
     Svc {
         #[command(subcommand)]
         cmd: SetSvcCommand,
@@ -133,6 +134,11 @@ enum SetEnvCommand {
         environment: String,
         serve_command: String,
     },
+    /// Set shell_command on an environment (used by `darp shell`)
+    ShellCommand {
+        environment: String,
+        shell_command: String,
+    },
     /// Set platform architecture (e.g., linux/amd64) on an environment
     Platform {
         environment: String,
@@ -158,6 +164,12 @@ enum SetSvcCommand {
         domain_name: String,
         service_name: String,
         serve_command: String,
+    },
+    /// Set shell_command on a service (used by `darp shell`)
+    ShellCommand {
+        domain_name: String,
+        service_name: String,
+        shell_command: String,
     },
     /// Set platform architecture (e.g., linux/amd64) on a service
     Platform {
@@ -279,6 +291,10 @@ enum RmEnvCommand {
     ServeCommand {
         environment: String,
     },
+    /// Remove shell_command from an environment
+    ShellCommand {
+        environment: String,
+    },
     /// Remove image_repository from an environment
     ImageRepository {
         environment: String,
@@ -310,6 +326,11 @@ enum RmSvcCommand {
     },
     /// Remove serve_command from a service
     ServeCommand {
+        domain_name: String,
+        service_name: String,
+    },
+    /// Remove shell_command from a service
+    ShellCommand {
         domain_name: String,
         service_name: String,
     },
@@ -1042,7 +1063,19 @@ fn cmd_shell(
 
     let image_name = config.resolve_image_name(env.as_ref(), service_opt, &base_image);
 
-    let inner_cmd = r#"if command -v nginx >/dev/null 2>&1; then
+    // Effective shell_command: service-level overrides environment-level; default to "sh"
+    let shell_command = if let Some(service) = service_opt {
+        service
+            .shell_command
+            .as_deref()
+            .or_else(|| env.as_ref().and_then(|e| e.shell_command.as_deref()))
+    } else {
+        env.as_ref().and_then(|e| e.shell_command.as_deref())
+    }
+    .unwrap_or("sh");
+
+    let inner_cmd = format!(
+        r#"if command -v nginx >/dev/null 2>&1; then
     echo "Starting nginx..."; nginx;
 else
     echo "nginx not found, skipping";
@@ -1050,7 +1083,9 @@ fi;
 echo "";
 echo "To leave this shell and stop the container, type: $(printf '\033[33m')exit$(printf '\033[0m')"
 echo "";
-cd /app; exec sh"#;
+cd /app; exec {shell}"#,
+        shell = shell_command
+    );
 
     cmd.arg(&image_name).arg("sh").arg("-c").arg(inner_cmd);
 
@@ -1326,6 +1361,17 @@ fn cmd_set(
                     environment, serve_command
                 );
             }
+            SetEnvCommand::ShellCommand {
+                environment,
+                shell_command,
+            } => {
+                config.set_shell_command(&environment, &shell_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set shell_command for environment '{}' to:\n  {}",
+                    environment, shell_command
+                );
+            }
             SetEnvCommand::Platform {
                 environment,
                 platform,
@@ -1376,6 +1422,18 @@ fn cmd_set(
                 println!(
                     "Set serve_command for service '{}.{}' to:\n  {}",
                     domain_name, service_name, serve_command
+                );
+            }
+            SetSvcCommand::ShellCommand {
+                domain_name,
+                service_name,
+                shell_command,
+            } => {
+                config.set_service_shell_command(&domain_name, &service_name, &shell_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set shell_command for service '{}.{}' to:\n  {}",
+                    domain_name, service_name, shell_command
                 );
             }
             SetSvcCommand::Platform {
@@ -1527,6 +1585,10 @@ fn cmd_rm(
                 config.rm_serve_command(&environment)?;
                 config.save(&paths.config_path)?;
             }
+            RmEnvCommand::ShellCommand { environment } => {
+                config.rm_shell_command(&environment)?;
+                config.save(&paths.config_path)?;
+            }
             RmEnvCommand::ImageRepository { environment } => {
                 config.rm_image_repository(&environment)?;
                 config.save(&paths.config_path)?;
@@ -1563,6 +1625,13 @@ fn cmd_rm(
                 service_name,
             } => {
                 config.rm_service_serve_command(&domain_name, &service_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::ShellCommand {
+                domain_name,
+                service_name,
+            } => {
+                config.rm_service_shell_command(&domain_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::ImageRepository {

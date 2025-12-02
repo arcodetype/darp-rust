@@ -1,4 +1,3 @@
-// config.rs
 use anyhow::{anyhow, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -71,6 +70,8 @@ pub struct Service {
     #[serde(default)]
     pub serve_command: Option<String>,
     #[serde(default)]
+    pub shell_command: Option<String>,
+    #[serde(default)]
     pub image_repository: Option<String>,
     #[serde(default)]
     pub platform: Option<String>,
@@ -84,6 +85,8 @@ pub struct Environment {
     pub volumes: Option<Vec<Volume>>,
     #[serde(default)]
     pub serve_command: Option<String>,
+    #[serde(default)]
+    pub shell_command: Option<String>,
     #[serde(default)]
     pub image_repository: Option<String>,
     #[serde(default)]
@@ -320,6 +323,37 @@ impl Config {
         }
 
         env.serve_command = None;
+        Ok(())
+    }
+
+    // Environment-level shell_command
+
+    pub fn set_shell_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.shell_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_shell_command(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.shell_command.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no custom shell_command.",
+                env_name
+            ));
+        }
+
+        env.shell_command = None;
         Ok(())
     }
 
@@ -813,6 +847,66 @@ impl Config {
         }
 
         svc.serve_command = None;
+        Ok(())
+    }
+
+    // Service-level shell_command
+
+    pub fn set_service_shell_command(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        cmd: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.shell_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_shell_command(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.shell_command.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no custom shell_command.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.shell_command = None;
         Ok(())
     }
 
