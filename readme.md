@@ -2,8 +2,6 @@
 
 `darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
 
-This is the Rust Port of this application.
-
 ## Build
 
 ### Mac
@@ -20,8 +18,6 @@ This tutorial takes you through running a simple Go API with darp.
 
 > Note: The examples use Docker, but everything works with Podman by substituting `docker` → `podman`.
 
-> Note: If you switch between Docker and Podman, you must run `darp deploy` again so the reverse-proxy configuration can be refreshed.
-
 ### Step One: Set Up a Projects Domain
 
 Initialize darp and configure a folder to be reverse-proxied:
@@ -29,12 +25,14 @@ Initialize darp and configure a folder to be reverse-proxied:
 ```sh
 mkdir ~/projects/
 mkdir ~/projects/hello-world/
-darp install
 darp config set engine docker
+darp install
 darp config add domain ~/projects
 darp deploy
 darp urls
 ```
+
+> Note: If you switch between Docker and Podman, run `darp install` again to ensure all of the necessary configuration is installed.
 
 > Note: After creating any new projects inside one of your domains, run `darp deploy` so darp can register a URL for it.
 
@@ -56,7 +54,7 @@ RUN apk add nginx && go install github.com/air-verse/air@latest
 WORKDIR /app
 ```
 
-> Note: You can find compatibile [dockerfiles](./dockerfiles/) in the `./dockerfiles/` directory of this project.
+> Note: You can find compatibile starter [dockerfiles](./dockerfiles/) in the `./dockerfiles/` directory of this project.
 
 ### Step Three: Shell Into Your Project (Changes Persist Locally)
 
@@ -101,12 +99,25 @@ curl http://hello-world.projects.test
 Try editing files inside the hello-world project directory in your editor:
 
 - Docker: Air automatically reloads on file changes.
-- Podman: You must edit .air.toml and change
-poll = false → poll = true so changes are detected.
+- Podman: You must edit `.air.toml` with
+`poll = false` → `poll = true` so changes are detected.
+
+### Step Five: Add default settings
+
+While you have the flexibility to provide an image or an environment, depending on the complexity of your setup, you may not want to have to keep track of that from day-to-day.
+
+```sh
+darp config set env default-container-image darp-go
+darp config set dom default-environment projects go
+```
+
+Now, you can simply run `darp shell` or `darp serve` when in the directory of your choosing and darp will choose the correct settings.
+
+> Note: When default settings are used and there's a conflict, `command line arguments` override `services` which override `environments`.
 
 ## Example config.json
 
-The following is a robust example showing the convenience afforded by setting up your `~/darp/config.json`. Some of the settings are different for demonstrative purposes.
+The following is a robust example showing the convenience afforded by setting up your `~/darp/config.json`. Some of the settings are configured just for demonstrative purposes.
 
 ```sh
 > tree Projects
@@ -142,7 +153,7 @@ The following darp commands simplify down to this docker equivalent based on the
 <td>
 
 ```sh
-# cd ~/Projects/admin directory
+# cd ~/Projects/admin
 darp shell
 ```
 
@@ -320,5 +331,3 @@ And finally, the `config.json`
   }
 }
 ```
-
-> Note: When default settings are used and there's a conflict, `command line arguments` override `services` which override `environments`.
