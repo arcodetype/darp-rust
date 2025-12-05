@@ -54,6 +54,10 @@ impl Engine {
         }
     }
 
+    pub fn is_docker(&self) -> bool {
+        matches!(self.kind, EngineKind::Docker)
+    }
+
     pub fn require_ready(&self) -> Result<()> {
         match self.kind {
             EngineKind::Docker => {

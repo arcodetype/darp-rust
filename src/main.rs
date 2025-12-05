@@ -939,6 +939,13 @@ fn cmd_shell(
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_interactive(&container_name);
+
+    // Make `host.docker.internal` work on Linux when using Docker
+    if engine.is_docker() {
+        cmd.arg("--add-host")
+            .arg("host.docker.internal:host-gateway");
+    }
+
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
@@ -1180,6 +1187,12 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
     let mut cmd = engine.base_run_noninteractive(&container_name);
+
+    // Make `host.docker.internal` work on Linux when using Docker
+    if engine.is_docker() {
+        cmd.arg("--add-host")
+            .arg("host.docker.internal:host-gateway");
+    }
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
