@@ -171,8 +171,8 @@ impl Engine {
 
         println!("starting {}", REVERSE_PROXY.green());
 
-        Command::new(bin)
-            .arg("run")
+        let mut cmd = Command::new(bin);
+        cmd.arg("run")
             .arg("-d")
             .arg("--rm")
             .arg("--name")
@@ -183,8 +183,14 @@ impl Engine {
             .arg(format!(
                 "{}:/etc/nginx/conf.d/vhost_container.conf",
                 paths.vhost_container_conf.display()
-            ))
-            .arg("nginx")
+            ));
+
+        if self.is_docker() {
+            cmd.arg("--add-host")
+                .arg("host.docker.internal:host-gateway");
+        }
+
+        cmd.arg("nginx")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
@@ -222,8 +228,8 @@ impl Engine {
 
         println!("starting {}", DNSMASQ.green());
 
-        Command::new(bin)
-            .arg("run")
+        let mut cmd = Command::new(bin);
+        cmd.arg("run")
             .arg("-d")
             .arg("--rm")
             .arg("--name")
@@ -234,8 +240,14 @@ impl Engine {
             .arg("53:53/tcp")
             .arg("-v")
             .arg(format!("{}:/etc/dnsmasq.d", paths.dnsmasq_dir.display()))
-            .arg("--cap-add=NET_ADMIN")
-            .arg("dockurr/dnsmasq")
+            .arg("--cap-add=NET_ADMIN");
+
+        if self.is_docker() {
+            cmd.arg("--add-host")
+                .arg("host.docker.internal:host-gateway");
+        }
+
+        cmd.arg("dockurr/dnsmasq")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
