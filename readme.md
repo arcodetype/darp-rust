@@ -40,7 +40,7 @@ darp urls
 
 ```sh
 cd ~/projects/hello-world
-echo "FROM golang:1.25-alpine3.22\n\nRUN apk add nginx && go install github.com/air-verse/air@latest\n\nWORKDIR /app" > Dockerfile
+echo -e "FROM golang:1.25-alpine3.22\n\nRUN apk add nginx && go install github.com/air-verse/air@latest\n\nWORKDIR /app" > Dockerfile
 docker build -t darp-go .
 ```
 
@@ -85,7 +85,7 @@ Different tech stacks will use different serve commands. For this example, we'll
 
 Configure and run:
 ```sh
-darp config set env serve_command go 'air'
+darp config set env serve-command go 'air'
 darp serve -e go darp-go
 ```
 

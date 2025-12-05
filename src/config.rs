@@ -298,11 +298,10 @@ impl Config {
     // Environment-level serve_command
 
     pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
-        let env = self
-            .environments
-            .as_mut()
-            .and_then(|e| e.get_mut(env_name))
-            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+        let envs = self.environments.get_or_insert_with(BTreeMap::new);
+        let env = envs
+            .entry(env_name.to_string())
+            .or_insert_with(Environment::default);
 
         env.serve_command = Some(cmd.to_string());
         Ok(())
