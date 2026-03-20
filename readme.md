@@ -9,7 +9,7 @@
 ```
 cargo build --release
 sudo rm /usr/local/bin/darp
-sudo cp ./target/release/darp /usr/local/bin/darp 
+sudo cp ./target/release/darp /usr/local/bin/darp
 ```
 
 ## Tutorial

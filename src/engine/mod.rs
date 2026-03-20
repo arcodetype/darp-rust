@@ -1,7 +1,10 @@
+// engine/mod.rs
+
 use crate::config::Config;
 use crate::config::DarpPaths;
 use anyhow::{anyhow, Result};
 use colored::*;
+use std::ffi::OsStr;
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug)]
@@ -79,7 +82,6 @@ impl Engine {
                     })
             }
             EngineKind::Podman => {
-                // Simplified: ensure machine list has at least one running.
                 let output = Command::new("podman")
                     .arg("machine")
                     .arg("list")
@@ -138,11 +140,42 @@ impl Engine {
     pub fn base_run_noninteractive(&self, container_name: &str) -> Command {
         let bin = self.bin.expect("engine bin not set");
         let mut cmd = Command::new(bin);
-        cmd.arg("run")
-            .arg("--rm")
-            .arg("--name")
-            .arg(container_name);
+        cmd.arg("run").arg("--rm").arg("--name").arg(container_name);
         cmd
+    }
+
+    pub fn command_to_string(&self, cmd: &Command) -> String {
+        fn shell_escape(s: &OsStr) -> String {
+            let s = s.to_string_lossy();
+
+            let safe = s.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '_' | '-' | '.' | '/' | ':' | '=' | ',' | '@' | '+' )
+            });
+
+            if safe {
+                s.into_owned()
+            } else {
+                // Single-quote wrap; escape internal single quotes: ' -> '\'' 
+                let mut out = String::from("'");
+                for ch in s.chars() {
+                    if ch == '\'' {
+                        out.push_str("'\\''");
+                    } else {
+                        out.push(ch);
+                    }
+                }
+                out.push('\'');
+                out
+            }
+        }
+
+        let mut parts = Vec::new();
+        parts.push(shell_escape(cmd.get_program()));
+        for arg in cmd.get_args() {
+            parts.push(shell_escape(arg));
+        }
+        parts.join(" ")
     }
 
     pub fn is_container_running(&self, name: &str) -> bool {

@@ -3,7 +3,7 @@ mod config;
 mod engine;
 mod os;
 
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, shells};
 use colored::*;
 use dirs::home_dir;
@@ -41,6 +41,9 @@ enum Command {
         /// Environment name (optional; falls back to domain default_environment if configured)
         #[arg(short, long)]
         environment: Option<String>,
+        /// Print the generated container command and exit without running it
+        #[arg(long)]
+        dry_run: bool,
         /// Container image to use (optional if default_container_image is configured)
         container_image: Option<String>,
     },
@@ -49,6 +52,9 @@ enum Command {
         /// Environment name (optional)
         #[arg(short, long)]
         environment: Option<String>,
+        /// Print the generated container command and exit without running it
+        #[arg(long)]
+        dry_run: bool,
         /// Container image to use (optional if default_container_image is configured)
         container_image: Option<String>,
     },
@@ -372,16 +378,16 @@ fn main() -> anyhow::Result<()> {
             Command::Deploy => cmd_deploy(&paths, &mut config, &os, &engine)?,
             Command::Shell {
                 environment,
+                dry_run,
                 container_image,
-            } => cmd_shell(environment, container_image, &paths, &config, &engine)?,
+            } => cmd_shell(environment, dry_run, container_image, &paths, &config, &engine)?,
             Command::Serve {
                 environment,
+                dry_run,
                 container_image,
-            } => cmd_serve(environment, container_image, &paths, &config, &engine)?,
+            } => cmd_serve(environment, dry_run, container_image, &paths, &config, &engine)?,
             Command::Config { cmd } => match cmd {
-                ConfigCommand::Set { cmd } => {
-                    cmd_set(cmd, &paths, &mut config, &engine_kind)?
-                }
+                ConfigCommand::Set { cmd } => cmd_set(cmd, &paths, &mut config, &engine_kind)?,
                 ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
                 ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
             },
@@ -661,9 +667,7 @@ fn add_platform_args(
                 cmd.arg("--arch").arg(platform);
             }
         }
-        EngineKind::None => {
-            // No engine configured; nothing to do here. require_ready will error earlier.
-        }
+        EngineKind::None => {} // No engine configured; nothing to do here. require_ready will error earlier.
     }
 }
 
@@ -881,6 +885,7 @@ fn cmd_deploy(
 
 fn cmd_shell(
     environment_cli: Option<String>,
+    dry_run: bool,
     container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
@@ -913,7 +918,6 @@ fn cmd_shell(
             std::process::exit(1);
         });
 
-    // CLI environment name takes precedence; otherwise fall back to domain.default_environment
     let effective_env_name: Option<String> =
         environment_cli.or_else(|| domain.default_environment.clone());
 
@@ -940,7 +944,6 @@ fn cmd_shell(
 
     let mut cmd = engine.base_run_interactive(&container_name);
 
-    // Make `host.docker.internal` work on Linux when using Docker
     if engine.is_docker() {
         cmd.arg("--add-host")
             .arg("host.docker.internal:host-gateway");
@@ -949,10 +952,7 @@ fn cmd_shell(
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!(
-            "{}:/etc/hosts",
-            paths.hosts_container_path.display()
-        ))
+        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
         .arg("-v")
         .arg(format!(
             "{}:/etc/nginx/nginx.conf",
@@ -1025,7 +1025,7 @@ fn cmd_shell(
         }
     }
 
-    // Effective platform: service overrides environment
+    // --- Platform (unchanged) ---
     let platform = if let Some(service) = service_opt {
         service
             .platform
@@ -1039,7 +1039,7 @@ fn cmd_shell(
         add_platform_args(&mut cmd, engine, platform);
     }
 
-    // Reverse proxy port
+    // --- Reverse proxy port (unchanged) ---
     let portmap: serde_json::Value =
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
 
@@ -1055,8 +1055,7 @@ fn cmd_shell(
             std::process::exit(1);
         });
 
-    cmd.arg("-p")
-        .arg(format!("{}:8000", rev_proxy_port));
+    cmd.arg("-p").arg(format!("{}:8000", rev_proxy_port));
 
     let base_image = resolve_base_image(
         container_image.as_deref(),
@@ -1070,7 +1069,6 @@ fn cmd_shell(
 
     let image_name = config.resolve_image_name(env.as_ref(), service_opt, &base_image);
 
-    // Effective shell_command: service-level overrides environment-level; default to "sh"
     let shell_command = if let Some(service) = service_opt {
         service
             .shell_command
@@ -1096,12 +1094,18 @@ cd /app; exec {shell}"#,
 
     cmd.arg(&image_name).arg("sh").arg("-c").arg(inner_cmd);
 
+    if dry_run {
+        println!("{}", engine.command_to_string(&cmd));
+        return Ok(());
+    }
+
     engine.run_container_interactive(cmd, &container_name, &[])?;
     Ok(())
 }
 
 fn cmd_serve(
     environment_cli: Option<String>,
+    dry_run: bool,
     container_image: Option<String>,
     paths: &DarpPaths,
     config: &Config,
@@ -1139,7 +1143,6 @@ fn cmd_serve(
         .as_ref()
         .and_then(|s| s.get(&current_directory_name));
 
-    // Resolve environment: CLI value first, then domain.default_environment
     let effective_env_name = environment_cli.or_else(|| domain.default_environment.clone());
 
     let environment_name = match effective_env_name {
@@ -1165,7 +1168,6 @@ or configure a default_environment for this domain:\n  darp config set dom defau
             std::process::exit(1);
         });
 
-    // Effective serve_command: service overrides environment
     let serve_command = service_opt
         .and_then(|svc| svc.serve_command.as_deref())
         .or_else(|| env.serve_command.as_deref())
@@ -1185,21 +1187,17 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         });
 
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
-
     let mut cmd = engine.base_run_noninteractive(&container_name);
 
-    // Make `host.docker.internal` work on Linux when using Docker
     if engine.is_docker() {
         cmd.arg("--add-host")
             .arg("host.docker.internal:host-gateway");
     }
+
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!(
-            "{}:/etc/hosts",
-            paths.hosts_container_path.display()
-        ))
+        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
         .arg("-v")
         .arg(format!(
             "{}:/etc/nginx/nginx.conf",
@@ -1291,8 +1289,7 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
             std::process::exit(1);
         });
 
-    cmd.arg("-p")
-        .arg(format!("{}:8000", rev_proxy_port));
+    cmd.arg("-p").arg(format!("{}:8000", rev_proxy_port));
 
     let base_image = resolve_base_image(
         container_image.as_deref(),
@@ -1317,6 +1314,11 @@ cd /app; {serve}"#,
     );
 
     cmd.arg(&image_name).arg("sh").arg("-c").arg(inner_cmd);
+
+    if dry_run {
+        println!("{}", engine.command_to_string(&cmd));
+        return Ok(());
+    }
 
     engine.run_container_interactive(cmd, &container_name, &[])?;
     Ok(())
