@@ -268,6 +268,9 @@ And finally, the `config.json`
           "host_portmappings": {
             "8082": "8082"
           },
+          "variables": {
+            "RANDOM_API_KEY": "abc123"
+          },
           "default_container_image": "php:83fpm"
         },
         "dashboard": {

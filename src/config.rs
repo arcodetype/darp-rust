@@ -66,6 +66,8 @@ pub struct Service {
     #[serde(default)]
     pub host_portmappings: Option<BTreeMap<String, String>>,
     #[serde(default)]
+    pub variables: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     pub volumes: Option<Vec<Volume>>,
     #[serde(default)]
     pub serve_command: Option<String>,
@@ -91,6 +93,8 @@ pub struct Environment {
     pub image_repository: Option<String>,
     #[serde(default)]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub variables: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub platform: Option<String>,
     #[serde(default)]
@@ -450,6 +454,163 @@ impl Config {
         }
 
         env.default_container_image = None;
+        Ok(())
+    }
+
+    // Service-level variables
+
+    pub fn add_variable(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+
+        // Look up by logical domain name (Domain.name), *not* by location key.
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let service = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+        let host_maps = service
+            .variables
+            .get_or_insert_with(BTreeMap::new);
+
+        if host_maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Variable on host side '{}.{}' ({}:____) already exists",
+                domain_name,
+                service_name,
+                host_port
+            ));
+        }
+
+        host_maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created variable for '{}.{}' ({}:{})",
+            domain_name, service_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_variable(
+        &mut self,
+        domain_name: &str,
+        service_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let services = domain
+            .services
+            .as_mut()
+            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+
+        let service = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        let host_maps = service
+            .variables
+            .as_mut()
+            .ok_or_else(|| anyhow!("No variables configured"))?;
+
+        if host_maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Variable on host side '{}.{}' ({}:____) does not exist",
+                domain_name,
+                service_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed variable for '{}.{}' ({}:____)",
+            domain_name, service_name, host_port
+        );
+        Ok(())
+    }
+
+    // Environment-level variables (auto-creates environment)
+
+    pub fn add_env_variable(
+        &mut self,
+        env_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let envs = self.environments.get_or_insert_with(BTreeMap::new);
+        let env = envs
+            .entry(env_name.to_string())
+            .or_insert_with(Environment::default);
+
+        let maps = env
+            .variables
+            .get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Variable on host side for environment '{}' ({}:____) already exists",
+                env_name,
+                host_port
+            ));
+        }
+
+        maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created variable for environment '{}' ({}:{})",
+            env_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_env_variable(
+        &mut self,
+        env_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let envs = self
+            .environments
+            .as_mut()
+            .ok_or_else(|| anyhow!("No environments configured"))?;
+        let env = envs
+            .get_mut(env_name)
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        let maps = env
+            .variables
+            .as_mut()
+            .ok_or_else(|| anyhow!("No variables configured for environment '{}'", env_name))?;
+
+        if maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Variable on host side for environment '{}' ({}:____) does not exist",
+                env_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed variable for environment '{}' ({}:____)",
+            env_name, host_port
+        );
         Ok(())
     }
 

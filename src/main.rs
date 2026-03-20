@@ -198,13 +198,13 @@ enum AddCommand {
         /// Location of the domain folder
         location: String,
     },
-    /// Add environment-scoped configuration (volumes, port mappings). Environments
+    /// Add environment-scoped configuration (volumes, port mappings, variables). Environments
     /// are created automatically as needed.
     Env {
         #[command(subcommand)]
         cmd: AddEnvCommand,
     },
-    /// Add service-scoped configuration (volumes, port mappings)
+    /// Add service-scoped configuration (volumes, port mappings, variables)
     Svc {
         #[command(subcommand)]
         cmd: AddSvcCommand,
@@ -218,6 +218,12 @@ enum AddEnvCommand {
         environment: String,
         host_port: String,
         container_port: String,
+    },
+    /// Add variable to an environment (auto-creates environment if needed)
+    Variable {
+        environment: String,
+        name: String,
+        value: String,
     },
     /// Add volume to an environment (auto-creates environment if needed)
     Volume {
@@ -235,6 +241,13 @@ enum AddSvcCommand {
         service_name: String,
         host_port: String,
         container_port: String,
+    },
+    /// Add variable to an environment (auto-creates environment if needed)
+    Variable {
+        domain_name: String,
+        service_name: String,
+        name: String,
+        value: String,
     },
     /// Add volume to a service
     Volume {
@@ -287,6 +300,11 @@ enum RmEnvCommand {
         environment: String,
         host_port: String,
     },
+    /// Remove variable from an environment
+    Variable {
+        environment: String,
+        name: String,
+    },
     /// Remove volume from an environment
     Volume {
         environment: String,
@@ -322,6 +340,12 @@ enum RmSvcCommand {
         domain_name: String,
         service_name: String,
         host_port: String,
+    },
+    /// Remove variable from a service
+    Variable {
+        domain_name: String,
+        service_name: String,
+        name: String,
     },
     /// Remove volume from a service
     Volume {
@@ -1025,6 +1049,28 @@ fn cmd_shell(
         }
     }
 
+    // Variables: service-level overrides environment-level
+    let variables = if let Some(service) = service_opt {
+        if let Some(m) = service.variables.as_ref() {
+            Some(m)
+        } else if let Some(env) = env.as_ref() {
+            env.variables.as_ref()
+        } else {
+            None
+        }
+    } else if let Some(env) = env.as_ref() {
+        env.variables.as_ref()
+    } else {
+        None
+    };
+
+    if let Some(v) = variables {
+        for (name, value) in v {
+            cmd.arg("-e")
+                .arg(format!("{name}={value}", name = name, value = value));
+        }
+    }
+
     // --- Platform (unchanged) ---
     let platform = if let Some(service) = service_opt {
         service
@@ -1261,6 +1307,26 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         for (host_port, container_port) in pm {
             cmd.arg("-p")
                 .arg(format!("{host}:{container}", host = host_port, container = container_port));
+        }
+    }
+
+    // Variables: service-level overrides environment-level
+    let variables = if let Some(service) = service_opt {
+        if let Some(m) = service.variables.as_ref() {
+            Some(m)
+        } else if let Some(m) = env.variables.as_ref() {
+            Some(m)
+        } else {
+            None
+        }
+    } else {
+        env.variables.as_ref()
+    };
+
+    if let Some(v) = variables {
+        for (name, value) in v {
+            cmd.arg("-e")
+                .arg(format!("{name}={value}", name = name, value = value));
         }
     }
 
@@ -1524,6 +1590,14 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 config.add_env_portmap(&environment, &host_port, &container_port)?;
                 config.save(&paths.config_path)?;
             }
+            AddEnvCommand::Variable {
+                environment,
+                name,
+                value,
+            } => {
+                config.add_env_variable(&environment, &name, &value)?;
+                config.save(&paths.config_path)?;
+            }
             AddEnvCommand::Volume {
                 environment,
                 container_dir,
@@ -1541,6 +1615,15 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 container_port,
             } => {
                 config.add_portmap(&domain_name, &service_name, &host_port, &container_port)?;
+                config.save(&paths.config_path)?;
+            }
+            AddSvcCommand::Variable {
+                domain_name,
+                service_name,
+                name,
+                value,
+            } => {
+                config.add_variable(&domain_name, &service_name, &name, &value)?;
                 config.save(&paths.config_path)?;
             }
             AddSvcCommand::Volume {
@@ -1588,6 +1671,13 @@ fn cmd_rm(
                 config.rm_env_portmap(&environment, &host_port)?;
                 config.save(&paths.config_path)?;
             }
+            RmEnvCommand::Variable {
+                environment,
+                name,
+            } => {
+                config.rm_env_variable(&environment, &name)?;
+                config.save(&paths.config_path)?;
+            }
             RmEnvCommand::Volume {
                 environment,
                 container_dir,
@@ -1624,6 +1714,14 @@ fn cmd_rm(
                 host_port,
             } => {
                 config.rm_portmap(&domain_name, &service_name, &host_port)?;
+                config.save(&paths.config_path)?;
+            }
+            RmSvcCommand::Variable {
+                domain_name,
+                service_name,
+                name,
+            } => {
+                config.rm_variable(&domain_name, &service_name, &name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::Volume {
