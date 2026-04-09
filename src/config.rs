@@ -45,6 +45,8 @@ impl DarpPaths {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_config: Option<String>,
     pub engine: Option<String>,
     pub podman_machine: Option<String>,
     pub domains: Option<std::collections::BTreeMap<String, Domain>>,
@@ -52,9 +54,15 @@ pub struct Config {
     pub urls_in_hosts: Option<bool>,
 }
 
+pub fn resolve_location(location: &str) -> Result<PathBuf> {
+    let home = home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
+    let resolved = location.replace("{home}", &home.to_string_lossy());
+    Ok(PathBuf::from(resolved))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Domain {
-    pub name: String,
+    pub location: String,
     #[serde(default)]
     pub services: Option<BTreeMap<String, Service>>,
     #[serde(default)]
@@ -148,6 +156,8 @@ impl Config {
             return Ok(Self::default());
         }
 
+        maybe_migrate(path)?;
+
         let data = fs::read(path)?;
         let cfg = serde_json::from_slice(&data).unwrap_or_default();
         Ok(cfg)
@@ -160,6 +170,17 @@ impl Config {
         let data = serde_json::to_vec_pretty(self)?;
         fs::write(path, data)?;
         Ok(())
+    }
+
+    pub fn find_domain_by_location(&self, canonical_path: &str) -> Option<(&str, &Domain)> {
+        self.domains.as_ref()?.iter().find(|(_name, d)| {
+            resolve_location(&d.location)
+                .and_then(|loc| {
+                    let canonical = fs::canonicalize(&loc).unwrap_or(loc);
+                    Ok(canonical.to_string_lossy().to_string() == canonical_path)
+                })
+                .unwrap_or(false)
+        }).map(|(name, domain)| (name.as_str(), domain))
     }
 
     pub fn parse_bool(&self, s: &str) -> Result<bool> {
@@ -217,45 +238,20 @@ impl Config {
 
     // --- domain/env helpers ---
 
-    pub fn add_domain(&mut self, location: &str) -> Result<()> {
-        let loc_path = PathBuf::from(location);
-        let domain_label = loc_path
-            .file_name()
-            .ok_or_else(|| anyhow!("Could not determine domain name from {location}"))?
-            .to_string_lossy()
-            .to_string();
-
-        let domain_name = slugify_name(&domain_label);
-
-        let loc_abs = fs::canonicalize(&loc_path).map_err(|e| {
-            anyhow!(
-                "Failed to canonicalize domain location '{}': {}",
-                location,
-                e
-            )
-        })?;
-        let loc_key = loc_abs.to_string_lossy().to_string();
-
+    pub fn add_domain(&mut self, name: &str, location: &str) -> Result<()> {
         let domains = self.domains.get_or_insert_with(BTreeMap::new);
 
-        if domains.contains_key(&loc_key) {
+        if domains.contains_key(name) {
             return Err(anyhow!(
-                "Domain with location '{}' already exists.",
-                loc_key
-            ));
-        }
-
-        if domains.values().any(|d| d.name == domain_name) {
-            return Err(anyhow!(
-                "Domain name '{}' already exists. Domain names must be unique.",
-                domain_name
+                "Domain '{}' already exists.",
+                name
             ));
         }
 
         domains.insert(
-            loc_key.clone(),
+            name.to_string(),
             Domain {
-                name: domain_name.clone(),
+                location: location.to_string(),
                 services: None,
                 default_environment: None,
                 host_portmappings: None,
@@ -269,7 +265,7 @@ impl Config {
             },
         );
 
-        println!("created '{}' at {}", domain_name, loc_key);
+        println!("created '{}' at {}", name, location);
         Ok(())
     }
 
@@ -279,14 +275,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("no domains configured"))?;
 
-        // Support removing either by name or by exact location key.
-        let key_to_remove = domains
-            .iter()
-            .find(|(location, domain)| domain.name == name || location.as_str() == name)
-            .map(|(location, _)| location.clone());
-
-        if let Some(key) = key_to_remove {
-            domains.remove(&key);
+        if domains.remove(name).is_some() {
             println!("removed '{}'", name);
             Ok(())
         } else {
@@ -315,8 +304,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.default_environment = Some(env_name.to_string());
@@ -329,8 +317,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.default_environment.is_none() {
@@ -352,8 +339,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.serve_command = Some(cmd.to_string());
@@ -366,8 +352,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.serve_command.is_none() {
@@ -389,8 +374,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.shell_command = Some(cmd.to_string());
@@ -403,8 +387,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.shell_command.is_none() {
@@ -426,8 +409,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.image_repository = Some(repo.to_string());
@@ -440,8 +422,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.image_repository.is_none() {
@@ -463,8 +444,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.platform = Some(platform.to_string());
@@ -477,8 +457,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.platform.is_none() {
@@ -504,8 +483,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         domain.default_container_image = Some(image.to_string());
@@ -518,8 +496,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         if domain.default_container_image.is_none() {
@@ -546,8 +523,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let maps = domain.host_portmappings.get_or_insert_with(BTreeMap::new);
@@ -578,8 +554,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let maps = domain
@@ -615,8 +590,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let maps = domain.variables.get_or_insert_with(BTreeMap::new);
@@ -647,8 +621,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let maps = domain
@@ -684,8 +657,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let vols = domain.volumes.get_or_insert_with(Vec::new);
@@ -726,8 +698,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let vols = domain
@@ -926,10 +897,9 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
-        // Look up by logical domain name (Domain.name), *not* by location key.
+        // Look up by domain name (the map key).
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -969,8 +939,7 @@ impl Config {
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1083,10 +1052,9 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
-        // Look up by logical domain name (Domain.name), *not* by location key.
+        // Look up by domain name (the map key).
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1126,8 +1094,7 @@ impl Config {
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1318,8 +1285,7 @@ impl Config {
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1368,8 +1334,7 @@ impl Config {
             .ok_or_else(|| anyhow!("No domains configured"))?;
 
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1418,8 +1383,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1441,8 +1405,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1478,8 +1441,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1501,8 +1463,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1538,8 +1499,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1561,8 +1521,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1598,8 +1557,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1621,8 +1579,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1658,8 +1615,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain.services.get_or_insert_with(BTreeMap::new);
@@ -1681,8 +1637,7 @@ impl Config {
             .as_mut()
             .ok_or_else(|| anyhow!("No domains configured"))?;
         let domain = domains
-            .values_mut()
-            .find(|d| d.name == domain_name)
+            .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let services = domain
@@ -1706,35 +1661,166 @@ impl Config {
     }
 }
 
-//// Simple slugifier for domain names:
-/// - lower-cases
-/// - turns spaces/underscores/dashes into single '-'
-/// - strips leading/trailing '-'
-fn slugify_name(input: &str) -> String {
-    let mut out = String::new();
-    let mut last_dash = false;
+fn maybe_migrate(path: &Path) -> Result<()> {
+    let data = fs::read(path)?;
+    let mut value: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
 
-    for ch in input.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_dash = false;
-        } else if ch.is_whitespace() || ch == '_' || ch == '-' {
-            if !last_dash && !out.is_empty() {
-                out.push('-');
-                last_dash = true;
+    let Some(domains) = value.get("domains").and_then(|d| d.as_object()) else {
+        return Ok(());
+    };
+
+    // Detect old format: keys are absolute paths AND entries have a "name" field
+    let needs_migration = domains
+        .iter()
+        .any(|(key, val)| key.starts_with('/') && val.get("name").is_some());
+
+    if !needs_migration {
+        return Ok(());
+    }
+
+    // Build new domains map: old key (path) → location field, old "name" → new key
+    let mut new_domains = serde_json::Map::new();
+    for (old_key, domain_val) in domains.clone() {
+        let name = domain_val
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let mut new_val = domain_val.clone();
+        if let Some(obj) = new_val.as_object_mut() {
+            obj.remove("name");
+            obj.insert(
+                "location".to_string(),
+                serde_json::Value::String(old_key),
+            );
+        }
+
+        new_domains.insert(name, new_val);
+    }
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "domains".to_string(),
+            serde_json::Value::Object(new_domains),
+        );
+    }
+
+    let data = serde_json::to_vec_pretty(&value)?;
+    fs::write(path, data)?;
+
+    eprintln!("Migrated config at {} to new domain format.", path.display());
+    Ok(())
+}
+
+pub fn merge_values(base: serde_json::Value, overlay: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+
+    match (base, overlay) {
+        (Value::Object(mut base_map), Value::Object(overlay_map)) => {
+            // Track which base keys are overridden by *-prefixed overlay keys
+            let mut star_overrides: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
+            for (key, overlay_val) in overlay_map {
+                if let Some(actual_key) = key.strip_prefix('*') {
+                    // Force replace: no recursion
+                    let actual_key = actual_key.to_string();
+                    star_overrides.insert(actual_key.clone());
+                    base_map.insert(actual_key, overlay_val);
+                } else if let Some(base_val) = base_map.remove(&key) {
+                    // Recursive merge
+                    base_map.insert(key, merge_values(base_val, overlay_val));
+                } else {
+                    // New key from overlay
+                    base_map.insert(key, overlay_val);
+                }
             }
-        } else {
-            // skip other punctuation
+
+            Value::Object(base_map)
+        }
+        (Value::Array(mut base_arr), Value::Array(overlay_arr)) => {
+            // Concatenate arrays by default
+            base_arr.extend(overlay_arr);
+            Value::Array(base_arr)
+        }
+        (_, overlay) => {
+            // Scalar or type mismatch: overlay wins
+            overlay
         }
     }
+}
 
-    if out.ends_with('-') {
-        out.pop();
-    }
+const MAX_CHAIN_DEPTH: usize = 10;
 
-    if out.is_empty() {
-        "domain".to_string()
-    } else {
-        out
+impl Config {
+    pub fn load_merged(leaf_path: &Path) -> Result<Self> {
+        let mut chain: Vec<PathBuf> = Vec::new();
+        let mut seen: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        let mut current = leaf_path.to_path_buf();
+
+        // Walk pre_config links from leaf to root
+        loop {
+            let canonical = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+
+            if seen.contains(&canonical) {
+                return Err(anyhow!(
+                    "Cycle detected in pre_config chain: {} was already visited",
+                    canonical.display()
+                ));
+            }
+            if chain.len() >= MAX_CHAIN_DEPTH {
+                return Err(anyhow!(
+                    "pre_config chain exceeds maximum depth of {}",
+                    MAX_CHAIN_DEPTH
+                ));
+            }
+
+            seen.insert(canonical);
+            chain.push(current.clone());
+
+            // Load as Value to check for pre_config without full deserialization
+            if !current.exists() {
+                break;
+            }
+
+            maybe_migrate(&current)?;
+
+            let data = fs::read(&current)?;
+            let val: serde_json::Value =
+                serde_json::from_slice(&data).unwrap_or_default();
+
+            match val.get("pre_config").and_then(|v| v.as_str()) {
+                Some(pre) => {
+                    let resolved = resolve_location(pre)?;
+                    current = resolved;
+                }
+                None => break,
+            }
+        }
+
+        // Reverse: chain is [leaf, ..., root], we need [root, ..., leaf]
+        chain.reverse();
+
+        // Merge from root to leaf
+        let mut merged = serde_json::Value::Object(serde_json::Map::new());
+        for path in &chain {
+            if !path.exists() {
+                continue;
+            }
+            let data = fs::read(path)?;
+            let val: serde_json::Value =
+                serde_json::from_slice(&data).unwrap_or_default();
+            merged = merge_values(merged, val);
+        }
+
+        // Remove pre_config from merged result (it's consumed during chain traversal)
+        if let Some(obj) = merged.as_object_mut() {
+            obj.remove("pre_config");
+        }
+
+        let cfg: Config = serde_json::from_value(merged)?;
+        Ok(cfg)
     }
 }

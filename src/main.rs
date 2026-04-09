@@ -121,6 +121,10 @@ enum SetCommand {
     UrlsInHosts {
         value: String,
     },
+    /// Set pre_config path (parent config file for chaining, supports {home} token)
+    PreConfig {
+        path: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -226,7 +230,9 @@ enum SetSvcCommand {
 enum AddCommand {
     /// Add a domain
     Domain {
-        /// Location of the domain folder
+        /// Logical domain name (e.g. 'my-project')
+        name: String,
+        /// Location of the domain folder (supports {home} token)
         location: String,
     },
     /// Add domain-scoped configuration (volumes, port mappings, variables)
@@ -321,8 +327,9 @@ enum RmCommand {
     /// Remove a domain
     Domain {
         name: String,
-        location: Option<String>,
     },
+    /// Remove pre_config from config
+    PreConfig {},
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
     /// Remove domain-level configuration
@@ -478,39 +485,55 @@ enum RmSvcCommand {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Paths & config
+    // Paths
     let paths = DarpPaths::from_env()?;
-    let mut config = Config::load(&paths.config_path)?;
-
-    // Determine engine from config
-    let engine_kind = EngineKind::from_config(&config);
-    let engine = Engine::new(engine_kind.clone(), &config)?;
-
-    // OS integration abstraction
-    let os = OsIntegration::new(&paths, &config, &engine_kind);
 
     if let Some(cmd) = cli.command {
         match cmd {
-            Command::Install => cmd_install(&paths, &mut config, &os, &engine)?,
-            Command::Uninstall => cmd_uninstall(&paths, &mut config, &os, &engine)?,
-            Command::Deploy => cmd_deploy(&paths, &mut config, &os, &engine)?,
-            Command::Shell {
-                environment,
-                dry_run,
-                container_image,
-            } => cmd_shell(environment, dry_run, container_image, &paths, &config, &engine)?,
-            Command::Serve {
-                environment,
-                dry_run,
-                container_image,
-            } => cmd_serve(environment, dry_run, container_image, &paths, &config, &engine)?,
-            Command::Config { cmd } => match cmd {
-                ConfigCommand::Set { cmd } => cmd_set(cmd, &paths, &mut config, &engine_kind)?,
-                ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
-                ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
-                ConfigCommand::Show { environment } => cmd_show(environment, &config)?,
-            },
-            Command::Urls => cmd_urls(&paths, &config)?,
+            Command::Config { cmd } => {
+                match cmd {
+                    ConfigCommand::Show { environment } => {
+                        // Show uses merged config
+                        let config = Config::load_merged(&paths.config_path)?;
+                        cmd_show(environment, &config)?;
+                    }
+                    _ => {
+                        // Config mutations use leaf config only
+                        let mut config = Config::load(&paths.config_path)?;
+                        let engine_kind = EngineKind::from_config(&config);
+                        match cmd {
+                            ConfigCommand::Set { cmd } => cmd_set(cmd, &paths, &mut config, &engine_kind)?,
+                            ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
+                            ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
+                            ConfigCommand::Show { .. } => unreachable!(),
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Runtime commands use merged config
+                let config = Config::load_merged(&paths.config_path)?;
+                let engine_kind = EngineKind::from_config(&config);
+                let engine = Engine::new(engine_kind.clone(), &config)?;
+                let os = OsIntegration::new(&paths, &config, &engine_kind);
+                match cmd {
+                    Command::Install => cmd_install(&paths, &mut config.clone(), &os, &engine)?,
+                    Command::Uninstall => cmd_uninstall(&paths, &mut config.clone(), &os, &engine)?,
+                    Command::Deploy => cmd_deploy(&paths, &config, &os, &engine)?,
+                    Command::Shell {
+                        environment,
+                        dry_run,
+                        container_image,
+                    } => cmd_shell(environment, dry_run, container_image, &paths, &config, &engine)?,
+                    Command::Serve {
+                        environment,
+                        dry_run,
+                        container_image,
+                    } => cmd_serve(environment, dry_run, container_image, &paths, &config, &engine)?,
+                    Command::Urls => cmd_urls(&paths, &config)?,
+                    Command::Config { .. } => unreachable!(),
+                }
+            }
         }
     } else {
         // No subcommand: print help
@@ -907,7 +930,7 @@ fn cmd_uninstall(
 
 fn cmd_deploy(
     paths: &DarpPaths,
-    config: &mut Config,
+    config: &Config,
     _os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
@@ -917,7 +940,7 @@ fn cmd_deploy(
 
     let host_gateway = engine.host_gateway();
 
-    let domains = match &mut config.domains {
+    let domains = match &config.domains {
         Some(d) if !d.is_empty() => d,
         _ => {
             eprintln!("Please configure a domain.");
@@ -945,8 +968,9 @@ fn cmd_deploy(
     // keep appending duplicate server blocks.
     std::fs::write(&paths.vhost_container_conf, b"")?;
 
-    for (location, domain) in domains.iter() {
-        let entries = std::fs::read_dir(location)?;
+    for (domain_name, domain) in domains.iter() {
+        let location = config::resolve_location(&domain.location)?;
+        let entries = std::fs::read_dir(&location)?;
         let mut domain_map = serde_json::Map::new();
 
         for entry in entries {
@@ -962,7 +986,7 @@ fn cmd_deploy(
                 let url = format!(
                     "{folder}.{domain}.test",
                     folder = folder_name,
-                    domain = domain.name
+                    domain = domain_name
                 );
 
                 hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
@@ -982,7 +1006,7 @@ fn cmd_deploy(
             }
         }
 
-        portmap.insert(domain.name.clone(), serde_json::Value::Object(domain_map));
+        portmap.insert(domain_name.clone(), serde_json::Value::Object(domain_map));
     }
 
     std::fs::write(&paths.hosts_container_path, hosts_container_lines.join(""))?;
@@ -1026,11 +1050,8 @@ fn cmd_shell(
         std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
     let parent_directory_key = parent_canonical.to_string_lossy().to_string();
 
-    let (domain, domain_name) = config
-        .domains
-        .as_ref()
-        .and_then(|d| d.get(&parent_directory_key))
-        .map(|domain| (domain, domain.name.clone()))
+    let (domain_name, domain) = config
+        .find_domain_by_location(&parent_directory_key)
         .unwrap_or_else(|| {
             eprintln!(
                 "domain location '{}' does not exist in darp's domain configuration.",
@@ -1038,6 +1059,7 @@ fn cmd_shell(
             );
             std::process::exit(1);
         });
+    let domain_name = domain_name.to_string();
 
     let effective_env_name: Option<String> =
         environment_cli.or_else(|| domain.default_environment.clone());
@@ -1222,11 +1244,8 @@ fn cmd_serve(
         std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
     let parent_directory_key = parent_canonical.to_string_lossy().to_string();
 
-    let (domain, domain_name) = config
-        .domains
-        .as_ref()
-        .and_then(|d| d.get(&parent_directory_key))
-        .map(|domain| (domain, domain.name.clone()))
+    let (domain_name, domain) = config
+        .find_domain_by_location(&parent_directory_key)
         .unwrap_or_else(|| {
             eprintln!(
                 "domain location '{}' does not exist in darp's domain configuration.",
@@ -1234,6 +1253,7 @@ fn cmd_serve(
             );
             std::process::exit(1);
         });
+    let domain_name = domain_name.to_string();
 
     let service_opt = domain
         .services
@@ -1651,6 +1671,11 @@ fn cmd_set(
                 paths.config_path.display()
             );
         }
+        SetCommand::PreConfig { path } => {
+            config.pre_config = Some(path.clone());
+            config.save(&paths.config_path)?;
+            println!("pre_config set to '{}'", path);
+        }
     }
 
     Ok(())
@@ -1658,8 +1683,8 @@ fn cmd_set(
 
 fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Result<()> {
     match cmd {
-        AddCommand::Domain { location } => {
-            config.add_domain(&location)?;
+        AddCommand::Domain { name, location } => {
+            config.add_domain(&name, &location)?;
             config.save(&paths.config_path)?;
         }
         AddCommand::Dom { cmd } => match cmd {
@@ -1759,7 +1784,12 @@ fn cmd_rm(
             config.podman_machine = None;
             config.save(&paths.config_path)?;
         }
-        RmCommand::Domain { name, .. } => {
+        RmCommand::PreConfig {} => {
+            config.pre_config = None;
+            config.save(&paths.config_path)?;
+            println!("pre_config removed");
+        }
+        RmCommand::Domain { name } => {
             config.rm_domain(&name)?;
             config.save(&paths.config_path)?;
         }
@@ -1939,11 +1969,8 @@ fn cmd_show(
         std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
     let parent_directory_key = parent_canonical.to_string_lossy().to_string();
 
-    let (domain, domain_name) = config
-        .domains
-        .as_ref()
-        .and_then(|d| d.get(&parent_directory_key))
-        .map(|domain| (domain, domain.name.clone()))
+    let (domain_name, domain) = config
+        .find_domain_by_location(&parent_directory_key)
         .unwrap_or_else(|| {
             eprintln!(
                 "domain location '{}' does not exist in darp's domain configuration.",
@@ -1951,6 +1978,7 @@ fn cmd_show(
             );
             std::process::exit(1);
         });
+    let domain_name = domain_name.to_string();
 
     let service_opt = domain
         .services
