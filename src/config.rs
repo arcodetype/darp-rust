@@ -59,6 +59,22 @@ pub struct Domain {
     pub services: Option<BTreeMap<String, Service>>,
     #[serde(default)]
     pub default_environment: Option<String>,
+    #[serde(default)]
+    pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub variables: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub volumes: Option<Vec<Volume>>,
+    #[serde(default)]
+    pub serve_command: Option<String>,
+    #[serde(default)]
+    pub shell_command: Option<String>,
+    #[serde(default)]
+    pub image_repository: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -99,6 +115,21 @@ pub struct Environment {
     pub platform: Option<String>,
     #[serde(default)]
     pub default_container_image: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolvedSettings {
+    pub domain_name: String,
+    pub service_name: String,
+    pub environment_name: Option<String>,
+    pub serve_command: Option<String>,
+    pub shell_command: Option<String>,
+    pub image_repository: Option<String>,
+    pub platform: Option<String>,
+    pub default_container_image: Option<String>,
+    pub host_portmappings: Option<BTreeMap<String, String>>,
+    pub variables: Option<BTreeMap<String, String>>,
+    pub volumes: Option<Vec<Volume>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,11 +193,17 @@ impl Config {
     pub fn resolve_image_name(
         &self,
         environment: Option<&Environment>,
+        domain: Option<&Domain>,
         service: Option<&Service>,
         cli_image: &str,
     ) -> String {
         if let Some(svc) = service {
             if let Some(repo) = &svc.image_repository {
+                return format!("{repo}:{image}", repo = repo, image = cli_image);
+            }
+        }
+        if let Some(dom) = domain {
+            if let Some(repo) = &dom.image_repository {
                 return format!("{repo}:{image}", repo = repo, image = cli_image);
             }
         }
@@ -221,6 +258,14 @@ impl Config {
                 name: domain_name.clone(),
                 services: None,
                 default_environment: None,
+                host_portmappings: None,
+                variables: None,
+                volumes: None,
+                serve_command: None,
+                shell_command: None,
+                image_repository: None,
+                platform: None,
+                default_container_image: None,
             },
         );
 
@@ -296,6 +341,416 @@ impl Config {
         }
 
         domain.default_environment = None;
+        Ok(())
+    }
+
+    // Domain-level serve_command
+
+    pub fn set_domain_serve_command(&mut self, domain_name: &str, cmd: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.serve_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_serve_command(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.serve_command.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no custom serve_command.",
+                domain_name
+            ));
+        }
+
+        domain.serve_command = None;
+        Ok(())
+    }
+
+    // Domain-level shell_command
+
+    pub fn set_domain_shell_command(&mut self, domain_name: &str, cmd: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.shell_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_shell_command(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.shell_command.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no custom shell_command.",
+                domain_name
+            ));
+        }
+
+        domain.shell_command = None;
+        Ok(())
+    }
+
+    // Domain-level image_repository
+
+    pub fn set_domain_image_repository(&mut self, domain_name: &str, repo: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.image_repository = Some(repo.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_image_repository(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.image_repository.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no custom image_repository.",
+                domain_name
+            ));
+        }
+
+        domain.image_repository = None;
+        Ok(())
+    }
+
+    // Domain-level platform
+
+    pub fn set_domain_platform(&mut self, domain_name: &str, platform: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.platform = Some(platform.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_platform(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.platform.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no custom platform.",
+                domain_name
+            ));
+        }
+
+        domain.platform = None;
+        Ok(())
+    }
+
+    // Domain-level default_container_image
+
+    pub fn set_domain_default_container_image(
+        &mut self,
+        domain_name: &str,
+        image: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.default_container_image = Some(image.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_default_container_image(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.default_container_image.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no default_container_image.",
+                domain_name
+            ));
+        }
+
+        domain.default_container_image = None;
+        Ok(())
+    }
+
+    // Domain-level port mappings
+
+    pub fn add_domain_portmap(
+        &mut self,
+        domain_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let maps = domain.host_portmappings.get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Portmapping on host side for domain '{}' ({}:____) already exists",
+                domain_name,
+                host_port
+            ));
+        }
+
+        maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created portmapping for domain '{}' ({}:{})",
+            domain_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_domain_portmap(
+        &mut self,
+        domain_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let maps = domain
+            .host_portmappings
+            .as_mut()
+            .ok_or_else(|| anyhow!("No host_portmappings configured for domain '{}'", domain_name))?;
+
+        if maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Portmapping on host side for domain '{}' ({}:____) does not exist",
+                domain_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed portmapping for domain '{}' ({}:____)",
+            domain_name, host_port
+        );
+        Ok(())
+    }
+
+    // Domain-level variables
+
+    pub fn add_domain_variable(
+        &mut self,
+        domain_name: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let maps = domain.variables.get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(name) {
+            return Err(anyhow!(
+                "Variable for domain '{}' ({}:____) already exists",
+                domain_name,
+                name
+            ));
+        }
+
+        maps.insert(name.to_string(), value.to_string());
+        println!(
+            "Created variable for domain '{}' ({}:{})",
+            domain_name, name, value
+        );
+        Ok(())
+    }
+
+    pub fn rm_domain_variable(
+        &mut self,
+        domain_name: &str,
+        name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let maps = domain
+            .variables
+            .as_mut()
+            .ok_or_else(|| anyhow!("No variables configured for domain '{}'", domain_name))?;
+
+        if maps.remove(name).is_none() {
+            return Err(anyhow!(
+                "Variable for domain '{}' ({}:____) does not exist",
+                domain_name,
+                name
+            ));
+        }
+
+        println!(
+            "Removed variable for domain '{}' ({}:____)",
+            domain_name, name
+        );
+        Ok(())
+    }
+
+    // Domain-level volumes
+
+    pub fn add_domain_volume(
+        &mut self,
+        domain_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let vols = domain.volumes.get_or_insert_with(Vec::new);
+
+        let new_vol = Volume {
+            container: container_dir.to_string(),
+            host: host_dir.to_string(),
+        };
+
+        if vols
+            .iter()
+            .any(|v| v.container == new_vol.container && v.host == new_vol.host)
+        {
+            return Err(anyhow!(
+                "Volume mapping already exists for domain '{}': {} -> {}",
+                domain_name,
+                new_vol.host,
+                new_vol.container
+            ));
+        }
+
+        vols.push(new_vol);
+        println!(
+            "Added volume to domain '{}': {} -> {}",
+            domain_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
+    pub fn rm_domain_volume(
+        &mut self,
+        domain_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .values_mut()
+            .find(|d| d.name == domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let vols = domain
+            .volumes
+            .as_mut()
+            .ok_or_else(|| anyhow!("No volumes configured for domain '{}'", domain_name))?;
+
+        let before = vols.len();
+        vols.retain(|v| !(v.container == container_dir && v.host == host_dir));
+
+        if vols.len() == before {
+            return Err(anyhow!(
+                "No matching volume found in domain '{}' for host '{}' -> container '{}'",
+                domain_name,
+                host_dir,
+                container_dir
+            ));
+        }
+
+        println!(
+            "Removed volume from domain '{}': {} -> {}",
+            domain_name, host_dir, container_dir
+        );
         Ok(())
     }
 
