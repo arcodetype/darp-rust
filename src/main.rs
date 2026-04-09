@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::config::{Config, DarpPaths, Domain, Environment, ResolvedSettings, Service};
+use crate::config::{Config, DarpPaths, Domain, Environment, Group, ResolvedSettings, Service};
 use crate::engine::{Engine, EngineKind};
 use crate::os::OsIntegration;
 
@@ -112,6 +112,11 @@ enum SetCommand {
         #[command(subcommand)]
         cmd: SetDomCommand,
     },
+    /// Set group-level properties
+    Grp {
+        #[command(subcommand)]
+        cmd: SetGrpCommand,
+    },
     /// Set Podman machine name
     PodmanMachine {
         /// Name of the Podman machine to use (e.g. 'podman-machine-default')
@@ -164,6 +169,46 @@ enum SetDomCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum SetGrpCommand {
+    /// Set default_environment on a group
+    DefaultEnvironment {
+        domain_name: String,
+        group_name: String,
+        default_environment: String,
+    },
+    /// Set image_repository on a group
+    ImageRepository {
+        domain_name: String,
+        group_name: String,
+        image_repository: String,
+    },
+    /// Set serve_command on a group
+    ServeCommand {
+        domain_name: String,
+        group_name: String,
+        serve_command: String,
+    },
+    /// Set shell_command on a group (used by `darp shell`)
+    ShellCommand {
+        domain_name: String,
+        group_name: String,
+        shell_command: String,
+    },
+    /// Set platform architecture (e.g., linux/amd64) on a group
+    Platform {
+        domain_name: String,
+        group_name: String,
+        platform: String,
+    },
+    /// Set default_container_image on a group (used when no image is passed on the CLI)
+    DefaultContainerImage {
+        domain_name: String,
+        group_name: String,
+        default_container_image: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum SetEnvCommand {
     /// Set image_repository on an environment
     ImageRepository {
@@ -197,30 +242,35 @@ enum SetSvcCommand {
     /// Set image_repository on a service
     ImageRepository {
         domain_name: String,
+        group_name: String,
         service_name: String,
         image_repository: String,
     },
     /// Set serve_command on a service
     ServeCommand {
         domain_name: String,
+        group_name: String,
         service_name: String,
         serve_command: String,
     },
     /// Set shell_command on a service (used by `darp shell`)
     ShellCommand {
         domain_name: String,
+        group_name: String,
         service_name: String,
         shell_command: String,
     },
     /// Set platform architecture (e.g., linux/amd64) on a service
     Platform {
         domain_name: String,
+        group_name: String,
         service_name: String,
         platform: String,
     },
     /// Set default_container_image on a service (used when no image is passed on the CLI)
     DefaultContainerImage {
         domain_name: String,
+        group_name: String,
         service_name: String,
         default_container_image: String,
     },
@@ -239,6 +289,11 @@ enum AddCommand {
     Dom {
         #[command(subcommand)]
         cmd: AddDomCommand,
+    },
+    /// Add group-scoped configuration
+    Grp {
+        #[command(subcommand)]
+        cmd: AddGrpCommand,
     },
     /// Add environment-scoped configuration (volumes, port mappings, variables). Environments
     /// are created automatically as needed.
@@ -276,6 +331,36 @@ enum AddDomCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum AddGrpCommand {
+    /// Create a new group in a domain
+    Group {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Add port mapping to a group
+    Portmap {
+        domain_name: String,
+        group_name: String,
+        host_port: String,
+        container_port: String,
+    },
+    /// Add variable to a group
+    Variable {
+        domain_name: String,
+        group_name: String,
+        name: String,
+        value: String,
+    },
+    /// Add volume to a group
+    Volume {
+        domain_name: String,
+        group_name: String,
+        container_dir: String,
+        host_dir: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum AddEnvCommand {
     /// Add port mapping to an environment (auto-creates environment if needed)
     Portmap {
@@ -302,13 +387,15 @@ enum AddSvcCommand {
     /// Add port mapping to a service
     Portmap {
         domain_name: String,
+        group_name: String,
         service_name: String,
         host_port: String,
         container_port: String,
     },
-    /// Add variable to an environment (auto-creates environment if needed)
+    /// Add variable to a service
     Variable {
         domain_name: String,
+        group_name: String,
         service_name: String,
         name: String,
         value: String,
@@ -316,6 +403,7 @@ enum AddSvcCommand {
     /// Add volume to a service
     Volume {
         domain_name: String,
+        group_name: String,
         service_name: String,
         container_dir: String,
         host_dir: String,
@@ -336,6 +424,11 @@ enum RmCommand {
     Dom {
         #[command(subcommand)]
         cmd: RmDomCommand,
+    },
+    /// Remove group-level configuration
+    Grp {
+        #[command(subcommand)]
+        cmd: RmGrpCommand,
     },
     /// Remove environment-scoped configuration
     Env {
@@ -395,6 +488,64 @@ enum RmDomCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum RmGrpCommand {
+    /// Remove a group from a domain
+    Group {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove default_environment from a group
+    DefaultEnvironment {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove port mapping from a group
+    Portmap {
+        domain_name: String,
+        group_name: String,
+        host_port: String,
+    },
+    /// Remove variable from a group
+    Variable {
+        domain_name: String,
+        group_name: String,
+        name: String,
+    },
+    /// Remove volume from a group
+    Volume {
+        domain_name: String,
+        group_name: String,
+        container_dir: String,
+        host_dir: String,
+    },
+    /// Remove serve_command from a group
+    ServeCommand {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove shell_command from a group
+    ShellCommand {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove image_repository from a group
+    ImageRepository {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove platform architecture from a group
+    Platform {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove default_container_image from a group
+    DefaultContainerImage {
+        domain_name: String,
+        group_name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum RmEnvCommand {
     /// Remove port mapping from an environment
     Portmap {
@@ -439,18 +590,21 @@ enum RmSvcCommand {
     /// Remove port mapping from a service
     Portmap {
         domain_name: String,
+        group_name: String,
         service_name: String,
         host_port: String,
     },
     /// Remove variable from a service
     Variable {
         domain_name: String,
+        group_name: String,
         service_name: String,
         name: String,
     },
     /// Remove volume from a service
     Volume {
         domain_name: String,
+        group_name: String,
         service_name: String,
         container_dir: String,
         host_dir: String,
@@ -458,26 +612,31 @@ enum RmSvcCommand {
     /// Remove serve_command from a service
     ServeCommand {
         domain_name: String,
+        group_name: String,
         service_name: String,
     },
     /// Remove shell_command from a service
     ShellCommand {
         domain_name: String,
+        group_name: String,
         service_name: String,
     },
     /// Remove image_repository from a service
     ImageRepository {
         domain_name: String,
+        group_name: String,
         service_name: String,
     },
     /// Remove platform architecture from a service
     Platform {
         domain_name: String,
+        group_name: String,
         service_name: String,
     },
     /// Remove default_container_image from a service
     DefaultContainerImage {
         domain_name: String,
+        group_name: String,
         service_name: String,
     },
 }
@@ -821,6 +980,7 @@ fn add_platform_args(
 fn resolve_base_image(
     cli_image: Option<&str>,
     env: Option<&Environment>,
+    group: Option<&Group>,
     domain: &Domain,
     service: Option<&Service>,
     env_name: Option<&str>,
@@ -833,10 +993,11 @@ fn resolve_base_image(
     }
 
     let from_service = service.and_then(|s| s.default_container_image.as_deref());
+    let from_group = group.and_then(|g| g.default_container_image.as_deref());
     let from_domain = domain.default_container_image.as_deref();
     let from_env = env.and_then(|e| e.default_container_image.as_deref());
 
-    if let Some(img) = from_service.or(from_domain).or(from_env) {
+    if let Some(img) = from_service.or(from_group).or(from_domain).or(from_env) {
         return img.to_string();
     }
 
@@ -970,17 +1131,27 @@ fn cmd_deploy(
 
     for (domain_name, domain) in domains.iter() {
         let location = config::resolve_location(&domain.location)?;
-        let entries = std::fs::read_dir(&location)?;
         let mut domain_map = serde_json::Map::new();
 
-        for entry in entries {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                let folder_name = entry.file_name().to_string_lossy().to_string();
+        // Collect group names (excluding ".") to know which subdirs are groups vs services
+        let group_names: std::collections::HashSet<String> = domain
+            .groups
+            .as_ref()
+            .map(|g| g.keys().filter(|k| k.as_str() != ".").cloned().collect())
+            .unwrap_or_default();
 
+        let groups = domain.groups.as_ref();
+
+        // Helper closure to register a service folder
+        let register_service =
+            |folder_name: &str,
+             port_number: &mut u16,
+             domain_map: &mut serde_json::Map<String, serde_json::Value>,
+             hosts_container_lines: &mut Vec<String>|
+             -> anyhow::Result<()> {
                 domain_map.insert(
-                    folder_name.clone(),
-                    serde_json::Value::Number(port_number.into()),
+                    folder_name.to_string(),
+                    serde_json::Value::Number((*port_number).into()),
                 );
 
                 let url = format!(
@@ -1002,7 +1173,46 @@ fn cmd_deploy(
                     .open(&paths.vhost_container_conf)?
                     .write_all(vhost.as_bytes())?;
 
-                port_number += 1;
+                *port_number += 1;
+                Ok(())
+            };
+
+        // Scan "." group: direct children of domain location, excluding group subdirs
+        if groups.map_or(true, |g| g.contains_key(".")) {
+            if let Ok(entries) = std::fs::read_dir(&location) {
+                for entry in entries {
+                    let entry = entry?;
+                    if entry.file_type()?.is_dir() {
+                        let folder_name = entry.file_name().to_string_lossy().to_string();
+                        if !group_names.contains(&folder_name) {
+                            register_service(
+                                &folder_name,
+                                &mut port_number,
+                                &mut domain_map,
+                                &mut hosts_container_lines,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scan named groups: subdirs within each group directory
+        for group_name in &group_names {
+            let group_path = location.join(group_name);
+            if let Ok(entries) = std::fs::read_dir(&group_path) {
+                for entry in entries {
+                    let entry = entry?;
+                    if entry.file_type()?.is_dir() {
+                        let folder_name = entry.file_name().to_string_lossy().to_string();
+                        register_service(
+                            &folder_name,
+                            &mut port_number,
+                            &mut domain_map,
+                            &mut hosts_container_lines,
+                        )?;
+                    }
+                }
             }
         }
 
@@ -1045,24 +1255,19 @@ fn cmd_shell(
         .to_string_lossy()
         .to_string();
 
-    let parent_directory = current_dir.parent().unwrap_or(&current_dir);
-    let parent_canonical =
-        std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
-    let parent_directory_key = parent_canonical.to_string_lossy().to_string();
-
-    let (domain_name, domain) = config
-        .find_domain_by_location(&parent_directory_key)
+    let (domain_name, domain, _group_name, group_opt) = config
+        .find_context_by_cwd(&current_dir)
         .unwrap_or_else(|| {
             eprintln!(
-                "domain location '{}' does not exist in darp's domain configuration.",
-                parent_directory_key
+                "Current directory does not exist in any darp domain configuration."
             );
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
 
-    let effective_env_name: Option<String> =
-        environment_cli.or_else(|| domain.default_environment.clone());
+    let effective_env_name: Option<String> = environment_cli
+        .or_else(|| group_opt.and_then(|g| g.default_environment.clone()))
+        .or_else(|| domain.default_environment.clone());
 
     let env = if let Some(ref env_name) = effective_env_name {
         let env_opt = config
@@ -1078,9 +1283,8 @@ fn cmd_shell(
         None
     };
 
-    let service_opt = domain
-        .services
-        .as_ref()
+    let service_opt = group_opt
+        .and_then(|g| g.services.as_ref())
         .and_then(|s| s.get(&current_directory_name));
 
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
@@ -1107,9 +1311,10 @@ fn cmd_shell(
             paths.vhost_container_conf.display()
         ));
 
-    // Volumes: service > domain > environment
+    // Volumes: service > group > domain > environment
     let effective_volumes = service_opt
         .and_then(|s| s.volumes.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.volumes.as_ref()))
         .or_else(|| domain.volumes.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.volumes.as_ref()));
 
@@ -1125,9 +1330,10 @@ fn cmd_shell(
         }
     }
 
-    // Host port mappings: service > domain > environment
+    // Host port mappings: service > group > domain > environment
     let host_portmaps = service_opt
         .and_then(|s| s.host_portmappings.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.host_portmappings.as_ref()))
         .or_else(|| domain.host_portmappings.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.host_portmappings.as_ref()));
 
@@ -1138,9 +1344,10 @@ fn cmd_shell(
         }
     }
 
-    // Variables: service > domain > environment
+    // Variables: service > group > domain > environment
     let variables = service_opt
         .and_then(|s| s.variables.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.variables.as_ref()))
         .or_else(|| domain.variables.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.variables.as_ref()));
 
@@ -1151,9 +1358,10 @@ fn cmd_shell(
         }
     }
 
-    // Platform: service > domain > environment
+    // Platform: service > group > domain > environment
     let platform = service_opt
         .and_then(|s| s.platform.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.platform.as_deref()))
         .or_else(|| domain.platform.as_deref())
         .or_else(|| env.as_ref().and_then(|e| e.platform.as_deref()));
 
@@ -1182,6 +1390,7 @@ fn cmd_shell(
     let base_image = resolve_base_image(
         container_image.as_deref(),
         env.as_ref(),
+        group_opt,
         domain,
         service_opt,
         effective_env_name.as_deref(),
@@ -1190,10 +1399,11 @@ fn cmd_shell(
         "shell",
     );
 
-    let image_name = config.resolve_image_name(env.as_ref(), Some(domain), service_opt, &base_image);
+    let image_name = config.resolve_image_name(env.as_ref(), group_opt, Some(domain), service_opt, &base_image);
 
     let shell_command = service_opt
         .and_then(|s| s.shell_command.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.shell_command.as_deref()))
         .or_else(|| domain.shell_command.as_deref())
         .or_else(|| env.as_ref().and_then(|e| e.shell_command.as_deref()))
         .unwrap_or("sh");
@@ -1239,28 +1449,23 @@ fn cmd_serve(
         .to_string_lossy()
         .to_string();
 
-    let parent_directory = current_dir.parent().unwrap_or(&current_dir);
-    let parent_canonical =
-        std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
-    let parent_directory_key = parent_canonical.to_string_lossy().to_string();
-
-    let (domain_name, domain) = config
-        .find_domain_by_location(&parent_directory_key)
+    let (domain_name, domain, _group_name, group_opt) = config
+        .find_context_by_cwd(&current_dir)
         .unwrap_or_else(|| {
             eprintln!(
-                "domain location '{}' does not exist in darp's domain configuration.",
-                parent_directory_key
+                "Current directory does not exist in any darp domain configuration."
             );
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
 
-    let service_opt = domain
-        .services
-        .as_ref()
+    let service_opt = group_opt
+        .and_then(|g| g.services.as_ref())
         .and_then(|s| s.get(&current_directory_name));
 
-    let effective_env_name = environment_cli.or_else(|| domain.default_environment.clone());
+    let effective_env_name = environment_cli
+        .or_else(|| group_opt.and_then(|g| g.default_environment.clone()))
+        .or_else(|| domain.default_environment.clone());
 
     let environment_name = match effective_env_name {
         Some(name) => name,
@@ -1287,6 +1492,7 @@ or configure a default_environment for this domain:\n  darp config set dom defau
 
     let serve_command = service_opt
         .and_then(|svc| svc.serve_command.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.serve_command.as_deref()))
         .or_else(|| domain.serve_command.as_deref())
         .or_else(|| env.serve_command.as_deref())
         .unwrap_or_else(|| {
@@ -1333,6 +1539,7 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     // Volumes: service > domain > environment
     let effective_volumes = service_opt
         .and_then(|s| s.volumes.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.volumes.as_ref()))
         .or_else(|| domain.volumes.as_ref())
         .or_else(|| env.volumes.as_ref());
 
@@ -1348,9 +1555,10 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         }
     }
 
-    // Host port mappings: service > domain > environment
+    // Host port mappings: service > group > domain > environment
     let host_portmaps = service_opt
         .and_then(|s| s.host_portmappings.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.host_portmappings.as_ref()))
         .or_else(|| domain.host_portmappings.as_ref())
         .or_else(|| env.host_portmappings.as_ref());
 
@@ -1361,9 +1569,10 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         }
     }
 
-    // Variables: service > domain > environment
+    // Variables: service > group > domain > environment
     let variables = service_opt
         .and_then(|s| s.variables.as_ref())
+        .or_else(|| group_opt.and_then(|g| g.variables.as_ref()))
         .or_else(|| domain.variables.as_ref())
         .or_else(|| env.variables.as_ref());
 
@@ -1374,9 +1583,10 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         }
     }
 
-    // Platform: service > domain > environment
+    // Platform: service > group > domain > environment
     let platform = service_opt
         .and_then(|svc| svc.platform.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.platform.as_deref()))
         .or_else(|| domain.platform.as_deref())
         .or_else(|| env.platform.as_deref());
 
@@ -1405,6 +1615,7 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let base_image = resolve_base_image(
         container_image.as_deref(),
         Some(env),
+        group_opt,
         domain,
         service_opt,
         Some(&environment_name),
@@ -1413,7 +1624,7 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         "serve",
     );
 
-    let image_name = config.resolve_image_name(Some(env), Some(domain), service_opt, &base_image);
+    let image_name = config.resolve_image_name(Some(env), group_opt, Some(domain), service_opt, &base_image);
 
     let inner_cmd = format!(
         r#"if command -v nginx >/dev/null 2>&1; then
@@ -1525,11 +1736,13 @@ fn cmd_set(
         SetCommand::Svc { cmd } => match cmd {
             SetSvcCommand::ImageRepository {
                 domain_name,
+                group_name,
                 service_name,
                 image_repository,
             } => {
                 config.set_service_image_repository(
                     &domain_name,
+                    &group_name,
                     &service_name,
                     &image_repository,
                 )?;
@@ -1541,10 +1754,11 @@ fn cmd_set(
             }
             SetSvcCommand::ServeCommand {
                 domain_name,
+                group_name,
                 service_name,
                 serve_command,
             } => {
-                config.set_service_serve_command(&domain_name, &service_name, &serve_command)?;
+                config.set_service_serve_command(&domain_name, &group_name, &service_name, &serve_command)?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set serve_command for service '{}.{}' to:\n  {}",
@@ -1553,10 +1767,11 @@ fn cmd_set(
             }
             SetSvcCommand::ShellCommand {
                 domain_name,
+                group_name,
                 service_name,
                 shell_command,
             } => {
-                config.set_service_shell_command(&domain_name, &service_name, &shell_command)?;
+                config.set_service_shell_command(&domain_name, &group_name, &service_name, &shell_command)?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set shell_command for service '{}.{}' to:\n  {}",
@@ -1565,10 +1780,11 @@ fn cmd_set(
             }
             SetSvcCommand::Platform {
                 domain_name,
+                group_name,
                 service_name,
                 platform,
             } => {
-                config.set_service_platform(&domain_name, &service_name, &platform)?;
+                config.set_service_platform(&domain_name, &group_name, &service_name, &platform)?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set platform for service '{}.{}' to:\n  {}",
@@ -1577,11 +1793,13 @@ fn cmd_set(
             }
             SetSvcCommand::DefaultContainerImage {
                 domain_name,
+                group_name,
                 service_name,
                 default_container_image,
             } => {
                 config.set_service_default_container_image(
                     &domain_name,
+                    &group_name,
                     &service_name,
                     &default_container_image,
                 )?;
@@ -1660,6 +1878,80 @@ fn cmd_set(
                 );
             }
         },
+        SetCommand::Grp { cmd } => match cmd {
+            SetGrpCommand::DefaultEnvironment {
+                domain_name,
+                group_name,
+                default_environment,
+            } => {
+                config.set_group_default_environment(&domain_name, &group_name, &default_environment)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set default_environment for group '{}' in domain '{}' to '{}'",
+                    group_name, domain_name, default_environment
+                );
+            }
+            SetGrpCommand::ImageRepository {
+                domain_name,
+                group_name,
+                image_repository,
+            } => {
+                config.set_group_image_repository(&domain_name, &group_name, &image_repository)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set image_repository for group '{}' in domain '{}' to:\n  {}",
+                    group_name, domain_name, image_repository
+                );
+            }
+            SetGrpCommand::ServeCommand {
+                domain_name,
+                group_name,
+                serve_command,
+            } => {
+                config.set_group_serve_command(&domain_name, &group_name, &serve_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set serve_command for group '{}' in domain '{}' to:\n  {}",
+                    group_name, domain_name, serve_command
+                );
+            }
+            SetGrpCommand::ShellCommand {
+                domain_name,
+                group_name,
+                shell_command,
+            } => {
+                config.set_group_shell_command(&domain_name, &group_name, &shell_command)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set shell_command for group '{}' in domain '{}' to:\n  {}",
+                    group_name, domain_name, shell_command
+                );
+            }
+            SetGrpCommand::Platform {
+                domain_name,
+                group_name,
+                platform,
+            } => {
+                config.set_group_platform(&domain_name, &group_name, &platform)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set platform for group '{}' in domain '{}' to:\n  {}",
+                    group_name, domain_name, platform
+                );
+            }
+            SetGrpCommand::DefaultContainerImage {
+                domain_name,
+                group_name,
+                default_container_image,
+            } => {
+                config.set_group_default_container_image(&domain_name, &group_name, &default_container_image)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Set default_container_image for group '{}' in domain '{}' to:\n  {}",
+                    group_name, domain_name, default_container_image
+                );
+            }
+        },
         SetCommand::UrlsInHosts { value } => {
             let v = config.parse_bool(&value)?;
             config.urls_in_hosts = Some(v);
@@ -1713,6 +2005,42 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 config.save(&paths.config_path)?;
             }
         },
+        AddCommand::Grp { cmd } => match cmd {
+            AddGrpCommand::Group {
+                domain_name,
+                group_name,
+            } => {
+                config.add_group(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            AddGrpCommand::Portmap {
+                domain_name,
+                group_name,
+                host_port,
+                container_port,
+            } => {
+                config.add_group_portmap(&domain_name, &group_name, &host_port, &container_port)?;
+                config.save(&paths.config_path)?;
+            }
+            AddGrpCommand::Variable {
+                domain_name,
+                group_name,
+                name,
+                value,
+            } => {
+                config.add_group_variable(&domain_name, &group_name, &name, &value)?;
+                config.save(&paths.config_path)?;
+            }
+            AddGrpCommand::Volume {
+                domain_name,
+                group_name,
+                container_dir,
+                host_dir,
+            } => {
+                config.add_group_volume(&domain_name, &group_name, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+        },
         AddCommand::Env { cmd } => match cmd {
             AddEnvCommand::Portmap {
                 environment,
@@ -1742,29 +2070,32 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
         AddCommand::Svc { cmd } => match cmd {
             AddSvcCommand::Portmap {
                 domain_name,
+                group_name,
                 service_name,
                 host_port,
                 container_port,
             } => {
-                config.add_portmap(&domain_name, &service_name, &host_port, &container_port)?;
+                config.add_portmap(&domain_name, &group_name, &service_name, &host_port, &container_port)?;
                 config.save(&paths.config_path)?;
             }
             AddSvcCommand::Variable {
                 domain_name,
+                group_name,
                 service_name,
                 name,
                 value,
             } => {
-                config.add_variable(&domain_name, &service_name, &name, &value)?;
+                config.add_variable(&domain_name, &group_name, &service_name, &name, &value)?;
                 config.save(&paths.config_path)?;
             }
             AddSvcCommand::Volume {
                 domain_name,
+                group_name,
                 service_name,
                 container_dir,
                 host_dir,
             } => {
-                config.add_service_volume(&domain_name, &service_name, &container_dir, &host_dir)?;
+                config.add_service_volume(&domain_name, &group_name, &service_name, &container_dir, &host_dir)?;
                 config.save(&paths.config_path)?;
             }
         },
@@ -1842,6 +2173,86 @@ fn cmd_rm(
                 config.save(&paths.config_path)?;
             }
         },
+        RmCommand::Grp { cmd } => match cmd {
+            RmGrpCommand::Group {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::DefaultEnvironment {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_default_environment(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+                println!(
+                    "Removed default_environment for group '{}' in domain '{}'",
+                    group_name, domain_name
+                );
+            }
+            RmGrpCommand::Portmap {
+                domain_name,
+                group_name,
+                host_port,
+            } => {
+                config.rm_group_portmap(&domain_name, &group_name, &host_port)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::Variable {
+                domain_name,
+                group_name,
+                name,
+            } => {
+                config.rm_group_variable(&domain_name, &group_name, &name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::Volume {
+                domain_name,
+                group_name,
+                container_dir,
+                host_dir,
+            } => {
+                config.rm_group_volume(&domain_name, &group_name, &container_dir, &host_dir)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::ServeCommand {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_serve_command(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::ShellCommand {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_shell_command(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::ImageRepository {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_image_repository(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::Platform {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_platform(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+            RmGrpCommand::DefaultContainerImage {
+                domain_name,
+                group_name,
+            } => {
+                config.rm_group_default_container_image(&domain_name, &group_name)?;
+                config.save(&paths.config_path)?;
+            }
+        },
         RmCommand::Env { cmd } => match cmd {
             RmEnvCommand::Portmap {
                 environment,
@@ -1889,62 +2300,70 @@ fn cmd_rm(
         RmCommand::Svc { cmd } => match cmd {
             RmSvcCommand::Portmap {
                 domain_name,
+                group_name,
                 service_name,
                 host_port,
             } => {
-                config.rm_portmap(&domain_name, &service_name, &host_port)?;
+                config.rm_portmap(&domain_name, &group_name, &service_name, &host_port)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::Variable {
                 domain_name,
+                group_name,
                 service_name,
                 name,
             } => {
-                config.rm_variable(&domain_name, &service_name, &name)?;
+                config.rm_variable(&domain_name, &group_name, &service_name, &name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::Volume {
                 domain_name,
+                group_name,
                 service_name,
                 container_dir,
                 host_dir,
             } => {
-                config.rm_service_volume(&domain_name, &service_name, &container_dir, &host_dir)?;
+                config.rm_service_volume(&domain_name, &group_name, &service_name, &container_dir, &host_dir)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::ServeCommand {
                 domain_name,
+                group_name,
                 service_name,
             } => {
-                config.rm_service_serve_command(&domain_name, &service_name)?;
+                config.rm_service_serve_command(&domain_name, &group_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::ShellCommand {
                 domain_name,
+                group_name,
                 service_name,
             } => {
-                config.rm_service_shell_command(&domain_name, &service_name)?;
+                config.rm_service_shell_command(&domain_name, &group_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::ImageRepository {
                 domain_name,
+                group_name,
                 service_name,
             } => {
-                config.rm_service_image_repository(&domain_name, &service_name)?;
+                config.rm_service_image_repository(&domain_name, &group_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::Platform {
                 domain_name,
+                group_name,
                 service_name,
             } => {
-                config.rm_service_platform(&domain_name, &service_name)?;
+                config.rm_service_platform(&domain_name, &group_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::DefaultContainerImage {
                 domain_name,
+                group_name,
                 service_name,
             } => {
-                config.rm_service_default_container_image(&domain_name, &service_name)?;
+                config.rm_service_default_container_image(&domain_name, &group_name, &service_name)?;
                 config.save(&paths.config_path)?;
             }
         },
@@ -1964,29 +2383,23 @@ fn cmd_show(
         .to_string_lossy()
         .to_string();
 
-    let parent_directory = current_dir.parent().unwrap_or(&current_dir);
-    let parent_canonical =
-        std::fs::canonicalize(parent_directory).unwrap_or_else(|_| parent_directory.to_path_buf());
-    let parent_directory_key = parent_canonical.to_string_lossy().to_string();
-
-    let (domain_name, domain) = config
-        .find_domain_by_location(&parent_directory_key)
+    let (domain_name, domain, group_name, group_opt) = config
+        .find_context_by_cwd(&current_dir)
         .unwrap_or_else(|| {
             eprintln!(
-                "domain location '{}' does not exist in darp's domain configuration.",
-                parent_directory_key
+                "Current directory does not exist in any darp domain configuration."
             );
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
 
-    let service_opt = domain
-        .services
-        .as_ref()
+    let service_opt = group_opt
+        .and_then(|g| g.services.as_ref())
         .and_then(|s| s.get(&current_directory_name));
 
-    let effective_env_name: Option<String> =
-        environment_cli.or_else(|| domain.default_environment.clone());
+    let effective_env_name: Option<String> = environment_cli
+        .or_else(|| group_opt.and_then(|g| g.default_environment.clone()))
+        .or_else(|| domain.default_environment.clone());
 
     let env = if let Some(ref env_name) = effective_env_name {
         let env_opt = config
@@ -2004,38 +2417,47 @@ fn cmd_show(
 
     let resolved = ResolvedSettings {
         domain_name,
+        group_name,
         service_name: current_directory_name,
         environment_name: effective_env_name,
         serve_command: service_opt
             .and_then(|s| s.serve_command.clone())
+            .or_else(|| group_opt.and_then(|g| g.serve_command.clone()))
             .or_else(|| domain.serve_command.clone())
             .or_else(|| env.as_ref().and_then(|e| e.serve_command.clone())),
         shell_command: service_opt
             .and_then(|s| s.shell_command.clone())
+            .or_else(|| group_opt.and_then(|g| g.shell_command.clone()))
             .or_else(|| domain.shell_command.clone())
             .or_else(|| env.as_ref().and_then(|e| e.shell_command.clone())),
         image_repository: service_opt
             .and_then(|s| s.image_repository.clone())
+            .or_else(|| group_opt.and_then(|g| g.image_repository.clone()))
             .or_else(|| domain.image_repository.clone())
             .or_else(|| env.as_ref().and_then(|e| e.image_repository.clone())),
         platform: service_opt
             .and_then(|s| s.platform.clone())
+            .or_else(|| group_opt.and_then(|g| g.platform.clone()))
             .or_else(|| domain.platform.clone())
             .or_else(|| env.as_ref().and_then(|e| e.platform.clone())),
         default_container_image: service_opt
             .and_then(|s| s.default_container_image.clone())
+            .or_else(|| group_opt.and_then(|g| g.default_container_image.clone()))
             .or_else(|| domain.default_container_image.clone())
             .or_else(|| env.as_ref().and_then(|e| e.default_container_image.clone())),
         host_portmappings: service_opt
             .and_then(|s| s.host_portmappings.clone())
+            .or_else(|| group_opt.and_then(|g| g.host_portmappings.clone()))
             .or_else(|| domain.host_portmappings.clone())
             .or_else(|| env.as_ref().and_then(|e| e.host_portmappings.clone())),
         variables: service_opt
             .and_then(|s| s.variables.clone())
+            .or_else(|| group_opt.and_then(|g| g.variables.clone()))
             .or_else(|| domain.variables.clone())
             .or_else(|| env.as_ref().and_then(|e| e.variables.clone())),
         volumes: service_opt
             .and_then(|s| s.volumes.clone())
+            .or_else(|| group_opt.and_then(|g| g.volumes.clone()))
             .or_else(|| domain.volumes.clone())
             .or_else(|| env.as_ref().and_then(|e| e.volumes.clone())),
     };

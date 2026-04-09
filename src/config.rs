@@ -64,6 +64,30 @@ pub fn resolve_location(location: &str) -> Result<PathBuf> {
 pub struct Domain {
     pub location: String,
     #[serde(default)]
+    pub groups: Option<BTreeMap<String, Group>>,
+    #[serde(default)]
+    pub default_environment: Option<String>,
+    #[serde(default)]
+    pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub variables: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub volumes: Option<Vec<Volume>>,
+    #[serde(default)]
+    pub serve_command: Option<String>,
+    #[serde(default)]
+    pub shell_command: Option<String>,
+    #[serde(default)]
+    pub image_repository: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub default_container_image: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Group {
+    #[serde(default)]
     pub services: Option<BTreeMap<String, Service>>,
     #[serde(default)]
     pub default_environment: Option<String>,
@@ -128,6 +152,7 @@ pub struct Environment {
 #[derive(Debug, Serialize)]
 pub struct ResolvedSettings {
     pub domain_name: String,
+    pub group_name: String,
     pub service_name: String,
     pub environment_name: Option<String>,
     pub serve_command: Option<String>,
@@ -172,6 +197,56 @@ impl Config {
         Ok(())
     }
 
+    /// Find domain, group, and service context from the current working directory.
+    /// Returns (domain_name, domain, group_name, group_opt) or None.
+    ///
+    /// Detection logic:
+    /// 1. If parent dir matches a domain location → group = ".", service = current_dir
+    /// 2. If grandparent dir matches a domain location → group = parent_dir_name, service = current_dir
+    pub fn find_context_by_cwd(
+        &self,
+        current_dir: &std::path::Path,
+    ) -> Option<(&str, &Domain, String, Option<&Group>)> {
+        let _current_dir_name = current_dir
+            .file_name()?
+            .to_string_lossy()
+            .to_string();
+
+        let parent = current_dir.parent()?;
+        let parent_canonical = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+        let parent_key = parent_canonical.to_string_lossy().to_string();
+
+        // Step 1: parent = domain → group "."
+        if let Some((domain_name, domain)) = self.find_domain_by_location(&parent_key) {
+            let group = domain
+                .groups
+                .as_ref()
+                .and_then(|g| g.get("."));
+            return Some((domain_name, domain, ".".to_string(), group));
+        }
+
+        // Step 2: grandparent = domain → group = parent dir name
+        let grandparent = parent.parent()?;
+        let grandparent_canonical =
+            fs::canonicalize(grandparent).unwrap_or_else(|_| grandparent.to_path_buf());
+        let grandparent_key = grandparent_canonical.to_string_lossy().to_string();
+
+        let parent_dir_name = parent
+            .file_name()?
+            .to_string_lossy()
+            .to_string();
+
+        if let Some((domain_name, domain)) = self.find_domain_by_location(&grandparent_key) {
+            let group = domain
+                .groups
+                .as_ref()
+                .and_then(|g| g.get(&parent_dir_name));
+            return Some((domain_name, domain, parent_dir_name, group));
+        }
+
+        None
+    }
+
     pub fn find_domain_by_location(&self, canonical_path: &str) -> Option<(&str, &Domain)> {
         self.domains.as_ref()?.iter().find(|(_name, d)| {
             resolve_location(&d.location)
@@ -214,12 +289,18 @@ impl Config {
     pub fn resolve_image_name(
         &self,
         environment: Option<&Environment>,
+        group: Option<&Group>,
         domain: Option<&Domain>,
         service: Option<&Service>,
         cli_image: &str,
     ) -> String {
         if let Some(svc) = service {
             if let Some(repo) = &svc.image_repository {
+                return format!("{repo}:{image}", repo = repo, image = cli_image);
+            }
+        }
+        if let Some(grp) = group {
+            if let Some(repo) = &grp.image_repository {
                 return format!("{repo}:{image}", repo = repo, image = cli_image);
             }
         }
@@ -252,7 +333,7 @@ impl Config {
             name.to_string(),
             Domain {
                 location: location.to_string(),
-                services: None,
+                groups: None,
                 default_environment: None,
                 host_portmappings: None,
                 variables: None,
@@ -725,6 +806,681 @@ impl Config {
         Ok(())
     }
 
+    // --- Group-level CRUD ---
+
+    pub fn add_group(&mut self, domain_name: &str, group_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+
+        if groups.contains_key(group_name) {
+            return Err(anyhow!(
+                "Group '{}' already exists in domain '{}'.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        groups.insert(group_name.to_string(), Group::default());
+        println!("Created group '{}' in domain '{}'", group_name, domain_name);
+        Ok(())
+    }
+
+    pub fn rm_group(&mut self, domain_name: &str, group_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+
+        if groups.remove(group_name).is_some() {
+            println!("Removed group '{}' from domain '{}'", group_name, domain_name);
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            ))
+        }
+    }
+
+    // Group-level default_environment
+
+    pub fn set_group_default_environment(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        env_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.default_environment = Some(env_name.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_default_environment(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.default_environment.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no default_environment.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.default_environment = None;
+        Ok(())
+    }
+
+    // Group-level serve_command
+
+    pub fn set_group_serve_command(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        cmd: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.serve_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_serve_command(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.serve_command.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no custom serve_command.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.serve_command = None;
+        Ok(())
+    }
+
+    // Group-level shell_command
+
+    pub fn set_group_shell_command(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        cmd: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.shell_command = Some(cmd.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_shell_command(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.shell_command.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no custom shell_command.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.shell_command = None;
+        Ok(())
+    }
+
+    // Group-level image_repository
+
+    pub fn set_group_image_repository(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        repo: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.image_repository = Some(repo.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_image_repository(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.image_repository.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no custom image_repository.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.image_repository = None;
+        Ok(())
+    }
+
+    // Group-level platform
+
+    pub fn set_group_platform(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        platform: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.platform = Some(platform.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_platform(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.platform.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no custom platform.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.platform = None;
+        Ok(())
+    }
+
+    // Group-level default_container_image
+
+    pub fn set_group_default_container_image(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        image: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        group.default_container_image = Some(image.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_default_container_image(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        if group.default_container_image.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no default_container_image.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.default_container_image = None;
+        Ok(())
+    }
+
+    // Group-level port mappings
+
+    pub fn add_group_portmap(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let maps = group.host_portmappings.get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(host_port) {
+            return Err(anyhow!(
+                "Portmapping on host side for group '{}' in domain '{}' ({}:____) already exists",
+                group_name,
+                domain_name,
+                host_port
+            ));
+        }
+
+        maps.insert(host_port.to_string(), container_port.to_string());
+        println!(
+            "Created portmapping for group '{}' in domain '{}' ({}:{})",
+            group_name, domain_name, host_port, container_port
+        );
+        Ok(())
+    }
+
+    pub fn rm_group_portmap(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        host_port: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let maps = group
+            .host_portmappings
+            .as_mut()
+            .ok_or_else(|| anyhow!("No host_portmappings configured for group '{}' in domain '{}'", group_name, domain_name))?;
+
+        if maps.remove(host_port).is_none() {
+            return Err(anyhow!(
+                "Portmapping on host side for group '{}' in domain '{}' ({}:____) does not exist",
+                group_name,
+                domain_name,
+                host_port
+            ));
+        }
+
+        println!(
+            "Removed portmapping for group '{}' in domain '{}' ({}:____)",
+            group_name, domain_name, host_port
+        );
+        Ok(())
+    }
+
+    // Group-level variables
+
+    pub fn add_group_variable(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let maps = group.variables.get_or_insert_with(BTreeMap::new);
+
+        if maps.contains_key(name) {
+            return Err(anyhow!(
+                "Variable for group '{}' in domain '{}' ({}:____) already exists",
+                group_name,
+                domain_name,
+                name
+            ));
+        }
+
+        maps.insert(name.to_string(), value.to_string());
+        println!(
+            "Created variable for group '{}' in domain '{}' ({}:{})",
+            group_name, domain_name, name, value
+        );
+        Ok(())
+    }
+
+    pub fn rm_group_variable(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let maps = group
+            .variables
+            .as_mut()
+            .ok_or_else(|| anyhow!("No variables configured for group '{}' in domain '{}'", group_name, domain_name))?;
+
+        if maps.remove(name).is_none() {
+            return Err(anyhow!(
+                "Variable for group '{}' in domain '{}' ({}:____) does not exist",
+                group_name,
+                domain_name,
+                name
+            ));
+        }
+
+        println!(
+            "Removed variable for group '{}' in domain '{}' ({}:____)",
+            group_name, domain_name, name
+        );
+        Ok(())
+    }
+
+    // Group-level volumes
+
+    pub fn add_group_volume(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let vols = group.volumes.get_or_insert_with(Vec::new);
+
+        let new_vol = Volume {
+            container: container_dir.to_string(),
+            host: host_dir.to_string(),
+        };
+
+        if vols
+            .iter()
+            .any(|v| v.container == new_vol.container && v.host == new_vol.host)
+        {
+            return Err(anyhow!(
+                "Volume mapping already exists for group '{}' in domain '{}': {} -> {}",
+                group_name,
+                domain_name,
+                new_vol.host,
+                new_vol.container
+            ));
+        }
+
+        vols.push(new_vol);
+        println!(
+            "Added volume to group '{}' in domain '{}': {} -> {}",
+            group_name, domain_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
+    pub fn rm_group_volume(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        container_dir: &str,
+        host_dir: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups
+            .get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+
+        let vols = group
+            .volumes
+            .as_mut()
+            .ok_or_else(|| anyhow!("No volumes configured for group '{}' in domain '{}'", group_name, domain_name))?;
+
+        let before = vols.len();
+        vols.retain(|v| !(v.container == container_dir && v.host == host_dir));
+
+        if vols.len() == before {
+            return Err(anyhow!(
+                "No matching volume found in group '{}' in domain '{}' for host '{}' -> container '{}'",
+                group_name,
+                domain_name,
+                host_dir,
+                container_dir
+            ));
+        }
+
+        println!(
+            "Removed volume from group '{}' in domain '{}': {} -> {}",
+            group_name, domain_name, host_dir, container_dir
+        );
+        Ok(())
+    }
+
     // Environment-level serve_command
 
     pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
@@ -888,6 +1644,7 @@ impl Config {
     pub fn add_variable(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         host_port: &str,
         container_port: &str,
@@ -902,7 +1659,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let service = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -930,6 +1690,7 @@ impl Config {
     pub fn rm_variable(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         host_port: &str,
     ) -> Result<()> {
@@ -942,10 +1703,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
 
         let service = services
             .get_mut(service_name)
@@ -1043,6 +1806,7 @@ impl Config {
     pub fn add_portmap(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         host_port: &str,
         container_port: &str,
@@ -1057,7 +1821,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let service = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1085,6 +1852,7 @@ impl Config {
     pub fn rm_portmap(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         host_port: &str,
     ) -> Result<()> {
@@ -1097,10 +1865,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
 
         let service = services
             .get_mut(service_name)
@@ -1275,6 +2045,7 @@ impl Config {
     pub fn add_service_volume(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         container_dir: &str,
         host_dir: &str,
@@ -1288,7 +2059,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1324,6 +2098,7 @@ impl Config {
     pub fn rm_service_volume(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         container_dir: &str,
         host_dir: &str,
@@ -1337,10 +2112,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1375,6 +2152,7 @@ impl Config {
     pub fn set_service_serve_command(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         cmd: &str,
     ) -> Result<()> {
@@ -1386,7 +2164,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1398,6 +2179,7 @@ impl Config {
     pub fn rm_service_serve_command(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
     ) -> Result<()> {
         let domains = self
@@ -1408,10 +2190,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1433,6 +2217,7 @@ impl Config {
     pub fn set_service_shell_command(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         cmd: &str,
     ) -> Result<()> {
@@ -1444,7 +2229,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1456,6 +2244,7 @@ impl Config {
     pub fn rm_service_shell_command(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
     ) -> Result<()> {
         let domains = self
@@ -1466,10 +2255,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1491,6 +2282,7 @@ impl Config {
     pub fn set_service_image_repository(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         repo: &str,
     ) -> Result<()> {
@@ -1502,7 +2294,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1514,6 +2309,7 @@ impl Config {
     pub fn rm_service_image_repository(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
     ) -> Result<()> {
         let domains = self
@@ -1524,10 +2320,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1549,6 +2347,7 @@ impl Config {
     pub fn set_service_platform(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         platform: &str,
     ) -> Result<()> {
@@ -1560,7 +2359,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1572,6 +2374,7 @@ impl Config {
     pub fn rm_service_platform(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
     ) -> Result<()> {
         let domains = self
@@ -1582,10 +2385,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1607,6 +2412,7 @@ impl Config {
     pub fn set_service_default_container_image(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
         image: &str,
     ) -> Result<()> {
@@ -1618,7 +2424,10 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain.services.get_or_insert_with(BTreeMap::new);
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
             .or_insert_with(Service::default);
@@ -1630,6 +2439,7 @@ impl Config {
     pub fn rm_service_default_container_image(
         &mut self,
         domain_name: &str,
+        group_name: &str,
         service_name: &str,
     ) -> Result<()> {
         let domains = self
@@ -1640,10 +2450,12 @@ impl Config {
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
-        let services = domain
-            .services
-            .as_mut()
-            .ok_or_else(|| anyhow!("No services configured for domain {}", domain_name))?;
+        let groups = domain.groups.as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name)
+            .ok_or_else(|| anyhow!("group, {}, does not exist in domain {}", group_name, domain_name))?;
+        let services = group.services.as_mut()
+            .ok_or_else(|| anyhow!("No services configured for group '{}' in domain {}", group_name, domain_name))?;
         let svc = services
             .get_mut(service_name)
             .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
@@ -1664,52 +2476,73 @@ impl Config {
 fn maybe_migrate(path: &Path) -> Result<()> {
     let data = fs::read(path)?;
     let mut value: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
+    let mut changed = false;
 
-    let Some(domains) = value.get("domains").and_then(|d| d.as_object()) else {
-        return Ok(());
-    };
+    // Migration 1: path-keyed domains → name-keyed domains with location field
+    if let Some(domains) = value.get("domains").and_then(|d| d.as_object()) {
+        let needs_path_migration = domains
+            .iter()
+            .any(|(key, val)| key.starts_with('/') && val.get("name").is_some());
 
-    // Detect old format: keys are absolute paths AND entries have a "name" field
-    let needs_migration = domains
-        .iter()
-        .any(|(key, val)| key.starts_with('/') && val.get("name").is_some());
+        if needs_path_migration {
+            let mut new_domains = serde_json::Map::new();
+            for (old_key, domain_val) in domains.clone() {
+                let name = domain_val
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-    if !needs_migration {
-        return Ok(());
-    }
+                let mut new_val = domain_val.clone();
+                if let Some(obj) = new_val.as_object_mut() {
+                    obj.remove("name");
+                    obj.insert(
+                        "location".to_string(),
+                        serde_json::Value::String(old_key),
+                    );
+                }
 
-    // Build new domains map: old key (path) → location field, old "name" → new key
-    let mut new_domains = serde_json::Map::new();
-    for (old_key, domain_val) in domains.clone() {
-        let name = domain_val
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+                new_domains.insert(name, new_val);
+            }
 
-        let mut new_val = domain_val.clone();
-        if let Some(obj) = new_val.as_object_mut() {
-            obj.remove("name");
-            obj.insert(
-                "location".to_string(),
-                serde_json::Value::String(old_key),
-            );
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "domains".to_string(),
+                    serde_json::Value::Object(new_domains),
+                );
+            }
+            changed = true;
         }
-
-        new_domains.insert(name, new_val);
     }
 
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "domains".to_string(),
-            serde_json::Value::Object(new_domains),
-        );
+    // Migration 2: domains with "services" but no "groups" → wrap services in "." group
+    if let Some(domains) = value.get_mut("domains").and_then(|d| d.as_object_mut()) {
+        for (_key, domain_val) in domains.iter_mut() {
+            if let Some(obj) = domain_val.as_object_mut() {
+                if obj.contains_key("services") && !obj.contains_key("groups") {
+                    let services = obj.remove("services").unwrap_or(serde_json::Value::Null);
+                    let mut dot_group = serde_json::Map::new();
+                    dot_group.insert("services".to_string(), services);
+
+                    let mut groups = serde_json::Map::new();
+                    groups.insert(".".to_string(), serde_json::Value::Object(dot_group));
+
+                    obj.insert(
+                        "groups".to_string(),
+                        serde_json::Value::Object(groups),
+                    );
+                    changed = true;
+                }
+            }
+        }
     }
 
-    let data = serde_json::to_vec_pretty(&value)?;
-    fs::write(path, data)?;
+    if changed {
+        let data = serde_json::to_vec_pretty(&value)?;
+        fs::write(path, data)?;
+        eprintln!("Migrated config at {} to new format.", path.display());
+    }
 
-    eprintln!("Migrated config at {} to new domain format.", path.display());
     Ok(())
 }
 
