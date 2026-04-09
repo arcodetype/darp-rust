@@ -43,10 +43,17 @@ impl DarpPaths {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreConfig {
+    pub location: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_location: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pre_config: Option<String>,
+    pub pre_config: Option<Vec<PreConfig>>,
     pub engine: Option<String>,
     pub podman_machine: Option<String>,
     pub domains: Option<std::collections::BTreeMap<String, Domain>>,
@@ -194,6 +201,32 @@ impl Config {
         }
         let data = serde_json::to_vec_pretty(self)?;
         fs::write(path, data)?;
+        Ok(())
+    }
+
+    pub fn add_pre_config(&mut self, location: &str, repo_location: Option<&str>) -> Result<()> {
+        let entries = self.pre_config.get_or_insert_with(Vec::new);
+        if entries.iter().any(|e| e.location == location) {
+            return Err(anyhow!("pre_config with location '{}' already exists", location));
+        }
+        entries.push(PreConfig {
+            location: location.to_string(),
+            repo_location: repo_location.map(|s| s.to_string()),
+        });
+        Ok(())
+    }
+
+    pub fn rm_pre_config(&mut self, location: &str) -> Result<()> {
+        let entries = self.pre_config.as_mut()
+            .ok_or_else(|| anyhow!("No pre_config entries configured"))?;
+        let before = entries.len();
+        entries.retain(|e| e.location != location);
+        if entries.len() == before {
+            return Err(anyhow!("pre_config with location '{}' does not exist", location));
+        }
+        if entries.is_empty() {
+            self.pre_config = None;
+        }
         Ok(())
     }
 
@@ -2537,6 +2570,20 @@ fn maybe_migrate(path: &Path) -> Result<()> {
         }
     }
 
+    // Migration 3: old string pre_config → array of objects
+    if let Some(pre) = value.get("pre_config") {
+        if pre.is_string() {
+            let location = pre.as_str().unwrap_or("").to_string();
+            let mut entry = serde_json::Map::new();
+            entry.insert("location".to_string(), serde_json::Value::String(location));
+            let arr = serde_json::Value::Array(vec![serde_json::Value::Object(entry)]);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("pre_config".to_string(), arr);
+            }
+            changed = true;
+        }
+    }
+
     if changed {
         let data = serde_json::to_vec_pretty(&value)?;
         fs::write(path, data)?;
@@ -2584,71 +2631,81 @@ pub fn merge_values(base: serde_json::Value, overlay: serde_json::Value) -> serd
     }
 }
 
-const MAX_CHAIN_DEPTH: usize = 10;
-
 impl Config {
     pub fn load_merged(leaf_path: &Path) -> Result<Self> {
-        let mut chain: Vec<PathBuf> = Vec::new();
-        let mut seen: std::collections::HashSet<PathBuf> =
-            std::collections::HashSet::new();
-        let mut current = leaf_path.to_path_buf();
-
-        // Walk pre_config links from leaf to root
-        loop {
-            let canonical = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
-
-            if seen.contains(&canonical) {
-                return Err(anyhow!(
-                    "Cycle detected in pre_config chain: {} was already visited",
-                    canonical.display()
-                ));
-            }
-            if chain.len() >= MAX_CHAIN_DEPTH {
-                return Err(anyhow!(
-                    "pre_config chain exceeds maximum depth of {}",
-                    MAX_CHAIN_DEPTH
-                ));
-            }
-
-            seen.insert(canonical);
-            chain.push(current.clone());
-
-            // Load as Value to check for pre_config without full deserialization
-            if !current.exists() {
-                break;
-            }
-
-            maybe_migrate(&current)?;
-
-            let data = fs::read(&current)?;
-            let val: serde_json::Value =
-                serde_json::from_slice(&data).unwrap_or_default();
-
-            match val.get("pre_config").and_then(|v| v.as_str()) {
-                Some(pre) => {
-                    let resolved = resolve_location(pre)?;
-                    current = resolved;
-                }
-                None => break,
-            }
+        // 1. Load and migrate the leaf config
+        if !leaf_path.exists() {
+            return Config::load(leaf_path);
         }
 
-        // Reverse: chain is [leaf, ..., root], we need [root, ..., leaf]
-        chain.reverse();
+        maybe_migrate(leaf_path)?;
 
-        // Merge from root to leaf
-        let mut merged = serde_json::Value::Object(serde_json::Map::new());
-        for path in &chain {
-            if !path.exists() {
+        let leaf_data = fs::read(leaf_path)?;
+        let leaf_val: serde_json::Value =
+            serde_json::from_slice(&leaf_data).unwrap_or_default();
+
+        // 2. Extract pre_config array from leaf
+        let pre_configs = leaf_val
+            .get("pre_config")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // 3. Load each pre_config file, check for domain conflicts between them
+        let mut pre_values: Vec<serde_json::Value> = Vec::new();
+        let mut seen_domains: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new(); // domain_key -> source file
+
+        for entry in &pre_configs {
+            let location = entry
+                .get("location")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("pre_config entry missing 'location' field"))?;
+
+            let resolved = resolve_location(location)?;
+            if !resolved.exists() {
+                eprintln!(
+                    "Warning: pre_config '{}' does not exist, skipping.",
+                    resolved.display()
+                );
                 continue;
             }
-            let data = fs::read(path)?;
+
+            maybe_migrate(&resolved)?;
+
+            let data = fs::read(&resolved)?;
             let val: serde_json::Value =
                 serde_json::from_slice(&data).unwrap_or_default();
+
+            // Check for domain conflicts between pre_configs
+            if let Some(domains) = val.get("domains").and_then(|d| d.as_object()) {
+                for key in domains.keys() {
+                    if let Some(prev_source) = seen_domains.get(key) {
+                        return Err(anyhow!(
+                            "Domain '{}' is defined in both '{}' and '{}'. \
+                             Pre-configs cannot have overlapping domains.",
+                            key,
+                            prev_source,
+                            location
+                        ));
+                    }
+                    seen_domains.insert(key.clone(), location.to_string());
+                }
+            }
+
+            pre_values.push(val);
+        }
+
+        // 4. Merge pre_configs together (array order = merge order)
+        let mut merged = serde_json::Value::Object(serde_json::Map::new());
+        for val in pre_values {
             merged = merge_values(merged, val);
         }
 
-        // Remove pre_config from merged result (it's consumed during chain traversal)
+        // 5. Overlay the leaf config on top
+        merged = merge_values(merged, leaf_val);
+
+        // 6. Strip pre_config from the merged result
         if let Some(obj) = merged.as_object_mut() {
             obj.remove("pre_config");
         }

@@ -89,6 +89,8 @@ enum ConfigCommand {
         #[arg(short, long)]
         environment: Option<String>,
     },
+    /// Pull latest changes for all pre_config repos
+    Pull,
 }
 
 #[derive(Subcommand, Debug)]
@@ -125,10 +127,6 @@ enum SetCommand {
     /// Enable/disable mirroring URLs into /etc/hosts
     UrlsInHosts {
         value: String,
-    },
-    /// Set pre_config path (parent config file for chaining, supports {home} token)
-    PreConfig {
-        path: String,
     },
 }
 
@@ -278,6 +276,14 @@ enum SetSvcCommand {
 
 #[derive(Subcommand, Debug)]
 enum AddCommand {
+    /// Add a pre_config entry (parent config for chaining)
+    PreConfig {
+        /// Path to the config file (supports {home} token)
+        location: String,
+        /// Path to git repo for `darp config pull` (supports {home} token)
+        #[arg(short, long)]
+        repo_location: Option<String>,
+    },
     /// Add a domain
     Domain {
         /// Logical domain name (e.g. 'my-project')
@@ -416,8 +422,11 @@ enum RmCommand {
     Domain {
         name: String,
     },
-    /// Remove pre_config from config
-    PreConfig {},
+    /// Remove a pre_config entry by its location
+    PreConfig {
+        /// Path to the config file to remove
+        location: String,
+    },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
     /// Remove domain-level configuration
@@ -656,6 +665,10 @@ fn main() -> anyhow::Result<()> {
                         let config = Config::load_merged(&paths.config_path)?;
                         cmd_show(environment, &config)?;
                     }
+                    ConfigCommand::Pull => {
+                        let config = Config::load(&paths.config_path)?;
+                        cmd_pull(&config)?;
+                    }
                     _ => {
                         // Config mutations use leaf config only
                         let mut config = Config::load(&paths.config_path)?;
@@ -664,7 +677,7 @@ fn main() -> anyhow::Result<()> {
                             ConfigCommand::Set { cmd } => cmd_set(cmd, &paths, &mut config, &engine_kind)?,
                             ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
                             ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
-                            ConfigCommand::Show { .. } => unreachable!(),
+                            ConfigCommand::Show { .. } | ConfigCommand::Pull => unreachable!(),
                         }
                     }
                 }
@@ -1963,11 +1976,6 @@ fn cmd_set(
                 paths.config_path.display()
             );
         }
-        SetCommand::PreConfig { path } => {
-            config.pre_config = Some(path.clone());
-            config.save(&paths.config_path)?;
-            println!("pre_config set to '{}'", path);
-        }
     }
 
     Ok(())
@@ -1975,6 +1983,11 @@ fn cmd_set(
 
 fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Result<()> {
     match cmd {
+        AddCommand::PreConfig { location, repo_location } => {
+            config.add_pre_config(&location, repo_location.as_deref())?;
+            config.save(&paths.config_path)?;
+            println!("Added pre_config '{}'", location);
+        }
         AddCommand::Domain { name, location } => {
             config.add_domain(&name, &location)?;
             config.save(&paths.config_path)?;
@@ -2115,10 +2128,10 @@ fn cmd_rm(
             config.podman_machine = None;
             config.save(&paths.config_path)?;
         }
-        RmCommand::PreConfig {} => {
-            config.pre_config = None;
+        RmCommand::PreConfig { location } => {
+            config.rm_pre_config(&location)?;
             config.save(&paths.config_path)?;
-            println!("pre_config removed");
+            println!("Removed pre_config '{}'", location);
         }
         RmCommand::Domain { name } => {
             config.rm_domain(&name)?;
@@ -2463,6 +2476,56 @@ fn cmd_show(
     };
 
     println!("{}", serde_json::to_string_pretty(&resolved)?);
+    Ok(())
+}
+
+fn cmd_pull(config: &Config) -> anyhow::Result<()> {
+    let entries = match &config.pre_config {
+        Some(entries) if !entries.is_empty() => entries,
+        _ => {
+            println!("No pre_config entries configured.");
+            return Ok(());
+        }
+    };
+
+    for entry in entries {
+        let repo_location = match &entry.repo_location {
+            Some(loc) => loc,
+            None => {
+                println!("Skipping '{}' (no repo_location)", entry.location);
+                continue;
+            }
+        };
+
+        let resolved = config::resolve_location(repo_location)?;
+        println!("Pulling '{}' ...", resolved.display());
+
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&resolved)
+            .arg("pull")
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stdout.is_empty() {
+                    print!("  {}", stdout);
+                }
+                if !stderr.is_empty() {
+                    eprint!("  {}", stderr);
+                }
+                if !out.status.success() {
+                    eprintln!("  git pull failed with exit code {}", out.status);
+                }
+            }
+            Err(e) => {
+                eprintln!("  Failed to run git: {}", e);
+            }
+        }
+    }
+
     Ok(())
 }
 
