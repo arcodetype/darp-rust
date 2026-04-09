@@ -1,336 +1,142 @@
 # darp
 
-`darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
+**darp** (<b>d</b>irectories <b>a</b>uto-<b>r</b>everse <b>p</b>roxied) turns local project folders into `.test` domains automatically. Point darp at a folder, and every subdirectory gets its own URL (e.g. `hello-world.projects.test`) backed by Docker/Podman, nginx, and dnsmasq.
 
-## Build
+No YAML files. No port juggling. Just `cd` into a project and run `darp serve`.
 
-### Mac
+## Quick Start
 
-```
+This gets you from zero to a running Go API in under five minutes.
+
+### 1. Install
+
+```sh
 cargo build --release
-sudo rm /usr/local/bin/darp
 sudo cp ./target/release/darp /usr/local/bin/darp
 ```
 
-## Tutorial
-
-This tutorial takes you through running a simple Go API with darp.
-
-> Note: The examples use Docker, but everything works with Podman by substituting `docker` → `podman`.
-
-### Step One: Set Up a Projects Domain
-
-Initialize darp and configure a folder to be reverse-proxied:
+### 2. Set up a domain
 
 ```sh
-mkdir ~/projects/
-mkdir ~/projects/hello-world/
+mkdir -p ~/projects/hello-world
+
 darp config set engine docker
 darp install
-darp config add domain ~/projects
+darp config add domain projects ~/projects
 darp deploy
-darp urls
 ```
 
-> Note: If you switch between Docker and Podman, run `darp install` again to ensure all of the necessary configuration is installed.
+### 3. Build a container image
 
-> Note: After creating any new projects inside one of your domains, run `darp deploy` so darp can register a URL for it.
-
-### Step Two: Create a linux image with nginx installed so that it's "`darp serve` compatible"
+Your image needs **nginx** installed so darp can reverse-proxy to it. See [dockerfiles/](./dockerfiles/) for starters.
 
 ```sh
 cd ~/projects/hello-world
-echo -e "FROM golang:1.25-alpine3.22\n\nRUN apk add nginx && go install github.com/air-verse/air@latest\n\nWORKDIR /app" > Dockerfile
+cat > Dockerfile <<'EOF'
+FROM golang:1.25-alpine3.22
+RUN apk add nginx && go install github.com/air-verse/air@latest
+WORKDIR /app
+EOF
 docker build -t darp-go .
 ```
 
-Resulting Dockerfile:
+### 4. Shell in and create a project
 
-```dockerfile
-FROM golang:1.25-alpine3.22
-
-RUN apk add nginx && go install github.com/air-verse/air@latest
-
-WORKDIR /app
-```
-
-> Note: You can find compatibile starter [dockerfiles](./dockerfiles/) in the `./dockerfiles/` directory of this project.
-
-### Step Three: Shell Into Your Project (Changes Persist Locally)
-
-Start a darp shell session using your image:
 ```sh
 darp shell darp-go
 ```
 
 Inside the container:
-```sh
-echo 'package main;import("net/http");func main(){http.HandleFunc("/",func(w http.ResponseWriter,r *http.Request){w.Write([]byte("We are darping! Edit Me\n"))});http.ListenAndServe(":8000",nil)}' > main.go
 
-go mod init arcodetype.test
-go mod tidy
-air init
+```sh
+echo 'package main
+import "net/http"
+func main() {
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        w.Write([]byte("We are darping!\n"))
+    })
+    http.ListenAndServe(":8000", nil)
+}' > main.go
+go mod init hello && go mod tidy && air init
+exit
 ```
 
+### 5. Serve it
 
-### Step Four: Serve Your Project
-
-Different tech stacks will use different serve commands. For this example, we'll use Air:
-
-> Note: Updating values via `darp config add`, `darp config set`, and `darp config rm` automatically updates `~/.darp/config.json`. Advanced users may edit this file manually, but using darp commands is recommended.
-
-#### Requirements for `darp serve`
-
-- Your API must listen on `port 8000` inside the container.
-
-Configure and run:
 ```sh
 darp config set env serve-command go 'air'
-darp serve -e go darp-go
+darp config set env default-container-image go darp-go
+darp config set dom default-environment projects go
+darp serve
 ```
 
-Now test the endpoint from another terminal:
+From another terminal:
+
 ```sh
 curl http://hello-world.projects.test
+# We are darping!
 ```
 
-> Note: If your endpoint is unresponsive, try `darp config set urls_in_hosts True`. It's possible that the `darp-masq` image is not resolving correctly. After turning on, a computer password will be required on future runs of the `darp deploy` command.
+That's it. Any edits you make in `~/projects/hello-world/` are live-reloaded.
 
-Try editing files inside the hello-world project directory in your editor:
+> **Tip:** Run `darp deploy` after adding new project folders so darp registers URLs for them.
 
-- Docker: Air automatically reloads on file changes.
-- Podman: You must edit `.air.toml` with
-`poll = false` → `poll = true` so changes are detected.
+## How It Works
 
-### Step Five: Add default settings
+```
+~/projects/                     <- domain "projects"
+  hello-world/                  <- hello-world.projects.test
+  billing-api/                  <- billing-api.projects.test
+```
 
-While you have the flexibility to provide an image or an environment, depending on the complexity of your setup, you may not want to have to keep track of that from day-to-day.
+When you run `darp serve` or `darp shell` from a project folder, darp:
+
+1. Detects which domain and service you're in based on your current directory
+2. Resolves settings from Service > Group > Domain > Environment (most specific wins)
+3. Builds a container command with the right ports, volumes, and env vars
+4. Reverse-proxies port 8000 through nginx to a `.test` URL
+
+## Key Concepts
+
+| Concept | What it is |
+|---|---|
+| **Domain** | A folder containing projects. Each subdirectory becomes a `.test` URL. |
+| **Group** | An optional subfolder within a domain for organizing by tech stack (e.g. `go/`, `laravel/`). The `.` group means "directly in the domain folder." Groups don't affect URLs. |
+| **Service** | A project folder. Settings here override everything else. |
+| **Environment** | A reusable profile (image, volumes, commands) shared across services. |
+| **Pre-config** | A parent config file (e.g. from a team repo) that gets merged into yours. |
+
+Settings cascade: **Service > Group > Domain > Environment**. The most specific level wins.
+
+## Documentation
+
+- [Configuration Guide](docs/configuration.md) -- settings, resolution, and config.json structure
+- [Team Collaboration](docs/team-collaboration.md) -- sharing configs with pre_config and `darp config pull`
+- [Command Reference](docs/commands.md) -- every darp command with examples
+- [Groups](docs/groups.md) -- organizing multi-stack projects under one domain
+
+## Common Commands
 
 ```sh
-darp config set env default-container-image darp-go
-darp config set dom default-environment projects go
+darp install                    # Set up system integration (nginx, dnsmasq, completions)
+darp deploy                     # Register URLs for all domain folders
+darp serve                      # Run the serve_command in a container
+darp shell                      # Open an interactive shell in a container
+darp urls                       # List all registered URLs
+darp config show                # Show resolved settings for current directory
+darp config show -e go          # Show what settings would apply with a specific environment
+darp config pull                # Git pull all pre_config repos
 ```
 
-Now, you can simply run `darp shell` or `darp serve` when in the directory of your choosing and darp will choose the correct settings.
+## Requirements
 
-> Note: When default settings are used and there's a conflict, `command line arguments` override `services` which override `environments`.
+- Rust toolchain (for building)
+- Docker or Podman
+- macOS or Linux
 
-## Example config.json
+## Notes
 
-The following is a robust example showing the convenience afforded by setting up your `~/darp/config.json`. Some of the settings are configured just for demonstrative purposes.
-
-```sh
-> tree Projects
-
-Projects
-├── admin
-├── analytics
-├── billing-service
-├── dashboard
-├── gateway
-└── user-service
-```
-
-```sh
-> darp urls
-
-arco
-    http://admin.arco.test (50100)
-    http://analytics.arco.test (50101)
-    http://billing-service.arco.test (50102)
-    http://dashboard.arco.test (50103)
-    http://gateway.arco.test (50104)
-    http://user-service.arco.test (50105)
-```
-
-The following darp commands simplify down to this docker equivalent based on the `config.json`.
-
-<table>
-<tr>
-<td>darp command</td><td>equivalent docker command</td>
-</tr>
-<tr>
-<td>
-
-```sh
-# cd ~/Projects/admin
-darp shell
-```
-
-</td>
-<td>
-
-```sh
-docker run --rm -it -p 50100:8000 -p 8082:8082 \
-    -v /Users/arco/.darp/hosts_container:/etc/hosts \
-    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
-    -v /Users/arco/Projects/admin:/app \
-    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
-    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
-    -v /Users/arco/.gitconfig:/root/.gitconfig \
-    -v /Users/arco/.ssh/:/root/.ssh/ \
-    git.arco.com:4567/php/master:php:83fpm bash
-```
-
-</td>
-</tr>
-<tr>
-<td>
-
-```sh
-# cd ~/Projects/admin
-darp serve
-```
-
-</td>
-<td>
-
-```sh
-docker run --rm -it -p 50100:8000 -p 8082:8082 \
-    -v /Users/arco/.darp/hosts_container:/etc/hosts \
-    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
-    -v /Users/arco/Projects/admin:/app \
-    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
-    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
-    -v /Users/arco/.gitconfig:/root/.gitconfig \
-    -v /Users/arco/.ssh/:/root/.ssh/ \
-    git.arco.com:4567/php/master:php:83fpm "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot"
-```
-
-</td>
-</tr>
-</tr>
-<tr>
-<td>
-
-```sh
-# cd ~/Projects/billing-service
-darp shell
-```
-
-</td>
-<td>
-
-```sh
-docker run --rm -it -p 50102:8000 \
-    --platform linux/amd64 \
-    -v /Users/arco/.darp/hosts_container:/etc/hosts \
-    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
-    -v /Users/arco/Projects/admin:/app \
-    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
-    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
-    -v /Users/arco/.gitconfig:/root/.gitconfig \
-    -v /Users/arco/.ssh/:/root/.ssh/ \
-    git.arco.com:4567/php/master:php:83 bash
-```
-
-</td>
-</tr>
-<tr>
-<td>
-
-```sh
-# cd ~/Projects/billing-service
-darp serve
-```
-
-</td>
-<td>
-
-```sh
-docker run --rm -it -p 50102:8000 -p 8082:8082 \
-    --platform linux/amd64 \
-    -v /Users/arco/.darp/hosts_container:/etc/hosts \
-    -v /Users/arco/.darp/vhost_container.conf:/etc/nginx/http.d/vhost_container.conf \
-    -v /Users/arco/Projects/admin:/app \
-    -v /Users/arco/Projects/admin/deploy/conf/php.ini:/etc/php83/php.ini \
-    -v /Users/arco/.composer/auth.json:/root/.composer/auth.json \
-    -v /Users/arco/.gitconfig:/root/.gitconfig \
-    -v /Users/arco/.ssh/:/root/.ssh/ \
-    git.arco.com:4567/php/master:php:83 "php artisan serve --host 0.0.0.0"
-```
-
-</td>
-</tr>
-</table>
-
-And finally, the `config.json`
-
-```json
-{
-  "engine": "docker",
-  "domains": {
-    "/Users/arco/Projects": {
-      "name": "arco",
-      "services": {
-        "admin": {
-          "serve_command": "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot",
-          "host_portmappings": {
-            "8082": "8082"
-          },
-          "variables": {
-            "RANDOM_API_KEY": "abc123"
-          },
-          "default_container_image": "php:83fpm"
-        },
-        "dashboard": {
-          "serve_command": "/usr/bin/php artisan serve --host 0.0.0.0 & /usr/bin/npm run hot",
-          "host_portmappings": {
-            "8081": "8081"
-          },
-          "default_container_image": "php:83fpm"
-        }
-      },
-      "default_environment": "lara:11"
-    }
-  },
-  "environments": {
-    "lara:11": {
-      "volumes": [
-        {
-          "container": "/root/.composer/auth.json",
-          "host": "{home}/.composer/auth.json"
-        },
-        {
-          "container": "/etc/php83/php.ini",
-          "host": "{pwd}/deploy/conf/php.ini"
-        },
-        {
-          "container": "/root/.gitconfig",
-          "host": "{home}/.gitconfig"
-        },
-        {
-          "container": "/root/.ssh",
-          "host": "{home}/.ssh"
-        }
-      ],
-      "serve_command": "php artisan serve --host 0.0.0.0",
-      "shell_command": "bash",
-      "image_repository": "git.arco.com:4567/php/master",
-      "default_container_image": "php:83",
-      "platform": "linux/amd64"
-    },
-    "laravue:11": {
-      "volumes": [
-        {
-          "container": "/root/.composer/auth.json",
-          "host": "{home}/.composer/auth.json"
-        },
-        {
-          "container": "/etc/php83/php.ini",
-          "host": "{pwd}/deploy/conf/php.ini"
-        },
-        {
-          "container": "/root/.gitconfig",
-          "host": "{home}/.gitconfig"
-        },
-        {
-          "container": "/root/.ssh",
-          "host": "{home}/.ssh"
-        }
-      ],
-      "image_repository": "git.arco.com:4567/php/master",
-    }
-  }
-}
-```
+- Your API must listen on **port 8000** inside the container.
+- Container images need **nginx** installed for the reverse proxy to work.
+- If `.test` domains aren't resolving, try `darp config set urls-in-hosts true` and re-run `darp deploy`.
+- Run `darp install` again if you switch between Docker and Podman.
