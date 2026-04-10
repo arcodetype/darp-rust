@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::config::DarpPaths;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use colored::*;
 use std::ffi::OsStr;
 use std::process::{Command, Stdio};
@@ -63,24 +63,22 @@ impl Engine {
 
     pub fn require_ready(&self) -> Result<()> {
         match self.kind {
-            EngineKind::Docker => {
-                Command::new("docker")
-                    .arg("info")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map_err(|e| anyhow!("failed to run docker info: {}", e))
-                    .and_then(|s| {
-                        if s.success() {
-                            Ok(())
-                        } else {
-                            Err(anyhow!(
-                                "Docker does not appear to be running ({})",
-                                "docker info".red()
-                            ))
-                        }
-                    })
-            }
+            EngineKind::Docker => Command::new("docker")
+                .arg("info")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| anyhow!("failed to run docker info: {}", e))
+                .and_then(|s| {
+                    if s.success() {
+                        Ok(())
+                    } else {
+                        Err(anyhow!(
+                            "Docker does not appear to be running ({})",
+                            "docker info".red()
+                        ))
+                    }
+                }),
             EngineKind::Podman => {
                 let output = Command::new("podman")
                     .arg("machine")
@@ -150,13 +148,13 @@ impl Engine {
 
             let safe = s.chars().all(|c| {
                 c.is_ascii_alphanumeric()
-                    || matches!(c, '_' | '-' | '.' | '/' | ':' | '=' | ',' | '@' | '+' )
+                    || matches!(c, '_' | '-' | '.' | '/' | ':' | '=' | ',' | '@' | '+')
             });
 
             if safe {
                 s.into_owned()
             } else {
-                // Single-quote wrap; escape internal single quotes: ' -> '\'' 
+                // Single-quote wrap; escape internal single quotes: ' -> '\''
                 let mut out = String::from("'");
                 for ch in s.chars() {
                     if ch == '\'' {

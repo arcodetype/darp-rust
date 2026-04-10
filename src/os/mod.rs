@@ -1,6 +1,6 @@
 use crate::config::{Config, DarpPaths};
 use crate::engine::EngineKind;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use colored::*;
 use std::fs;
 use std::io::Write;
@@ -39,7 +39,10 @@ impl<'a> OsIntegration<'a> {
                 .spawn()?;
 
             {
-                let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("Could not open stdin"))?;
+                let stdin = child
+                    .stdin
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("Could not open stdin"))?;
                 stdin.write_all(b"nameserver 127.0.0.1\n")?;
             }
 
@@ -155,7 +158,10 @@ impl<'a> OsIntegration<'a> {
                 .spawn()?;
 
             {
-                let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("Could not open stdin"))?;
+                let stdin = child
+                    .stdin
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("Could not open stdin"))?;
                 stdin.write_all(new_contents.as_bytes())?;
             }
 
@@ -186,7 +192,9 @@ impl<'a> OsIntegration<'a> {
                 .status()
                 .map_err(|e| anyhow!("failed to remove resolver file: {}", e))?;
             println!("{} removed", self.resolver_file.green());
-            println!("Darp resolver removed. Config and data under $DARP_ROOT were left untouched.");
+            println!(
+                "Darp resolver removed. Config and data under $DARP_ROOT were left untouched."
+            );
             Ok(())
         }
 

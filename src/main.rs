@@ -106,9 +106,7 @@ enum ConfigCommand {
 #[derive(Subcommand, Debug)]
 enum SetCommand {
     /// Set container engine (podman|docker)
-    Engine {
-        engine: String,
-    },
+    Engine { engine: String },
     /// Set image_repository / serve_command / shell_command / platform / default_container_image on an environment
     Env {
         #[command(subcommand)]
@@ -135,9 +133,7 @@ enum SetCommand {
         new_podman_machine: String,
     },
     /// Enable/disable mirroring URLs into /etc/hosts
-    UrlsInHosts {
-        value: String,
-    },
+    UrlsInHosts { value: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -429,9 +425,7 @@ enum AddSvcCommand {
 #[derive(Subcommand, Debug)]
 enum RmCommand {
     /// Remove a domain
-    Domain {
-        name: String,
-    },
+    Domain { name: String },
     /// Remove a pre_config entry by its location
     PreConfig {
         /// Path to the config file to remove
@@ -474,10 +468,7 @@ enum RmDomCommand {
         host_port: String,
     },
     /// Remove variable from a domain
-    Variable {
-        domain_name: String,
-        name: String,
-    },
+    Variable { domain_name: String, name: String },
     /// Remove volume from a domain
     Volume {
         domain_name: String,
@@ -485,25 +476,15 @@ enum RmDomCommand {
         host_dir: String,
     },
     /// Remove serve_command from a domain
-    ServeCommand {
-        domain_name: String,
-    },
+    ServeCommand { domain_name: String },
     /// Remove shell_command from a domain
-    ShellCommand {
-        domain_name: String,
-    },
+    ShellCommand { domain_name: String },
     /// Remove image_repository from a domain
-    ImageRepository {
-        domain_name: String,
-    },
+    ImageRepository { domain_name: String },
     /// Remove platform architecture from a domain
-    Platform {
-        domain_name: String,
-    },
+    Platform { domain_name: String },
     /// Remove default_container_image from a domain
-    DefaultContainerImage {
-        domain_name: String,
-    },
+    DefaultContainerImage { domain_name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -572,10 +553,7 @@ enum RmEnvCommand {
         host_port: String,
     },
     /// Remove variable from an environment
-    Variable {
-        environment: String,
-        name: String,
-    },
+    Variable { environment: String, name: String },
     /// Remove volume from an environment
     Volume {
         environment: String,
@@ -583,25 +561,15 @@ enum RmEnvCommand {
         host_dir: String,
     },
     /// Remove serve_command from an environment
-    ServeCommand {
-        environment: String,
-    },
+    ServeCommand { environment: String },
     /// Remove shell_command from an environment
-    ShellCommand {
-        environment: String,
-    },
+    ShellCommand { environment: String },
     /// Remove image_repository from an environment
-    ImageRepository {
-        environment: String,
-    },
+    ImageRepository { environment: String },
     /// Remove platform architecture from an environment
-    Platform {
-        environment: String,
-    },
+    Platform { environment: String },
     /// Remove default_container_image from an environment
-    DefaultContainerImage {
-        environment: String,
-    },
+    DefaultContainerImage { environment: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -684,7 +652,9 @@ fn main() -> anyhow::Result<()> {
                         let mut config = Config::load(&paths.config_path)?;
                         let engine_kind = EngineKind::from_config(&config);
                         match cmd {
-                            ConfigCommand::Set { cmd } => cmd_set(cmd, &paths, &mut config, &engine_kind)?,
+                            ConfigCommand::Set { cmd } => {
+                                cmd_set(cmd, &paths, &mut config, &engine_kind)?
+                            }
                             ConfigCommand::Add { cmd } => cmd_add(cmd, &paths, &mut config)?,
                             ConfigCommand::Rm { cmd } => cmd_rm(cmd, &paths, &mut config)?,
                             ConfigCommand::Show { .. } | ConfigCommand::Pull => unreachable!(),
@@ -706,12 +676,26 @@ fn main() -> anyhow::Result<()> {
                         environment,
                         dry_run,
                         container_image,
-                    } => cmd_shell(environment, dry_run, container_image, &paths, &config, &engine)?,
+                    } => cmd_shell(
+                        environment,
+                        dry_run,
+                        container_image,
+                        &paths,
+                        &config,
+                        &engine,
+                    )?,
                     Command::Serve {
                         environment,
                         dry_run,
                         container_image,
-                    } => cmd_serve(environment, dry_run, container_image, &paths, &config, &engine)?,
+                    } => cmd_serve(
+                        environment,
+                        dry_run,
+                        container_image,
+                        &paths,
+                        &config,
+                        &engine,
+                    )?,
                     Command::Urls => cmd_urls(&paths, &config)?,
                     Command::Doctor => cmd_doctor(&paths, &config, &engine)?,
                     Command::CheckImage { image, environment } => {
@@ -973,11 +957,7 @@ fn uninstall_shell_completions() -> anyhow::Result<()> {
 // Platform helper
 // ---------------------------------------------------------------------------
 
-fn add_platform_args(
-    cmd: &mut std::process::Command,
-    engine: &Engine,
-    platform: &str,
-) {
+fn add_platform_args(cmd: &mut std::process::Command, engine: &Engine, platform: &str) {
     match engine.kind {
         EngineKind::Docker => {
             // Docker expects full platform string, e.g. linux/amd64
@@ -1152,9 +1132,7 @@ impl DoctorSection {
     }
 
     fn passed(&self) -> bool {
-        self.results
-            .iter()
-            .all(|r| matches!(r, CheckResult::Ok(_)))
+        self.results.iter().all(|r| matches!(r, CheckResult::Ok(_)))
     }
 
     fn print(&self) {
@@ -1173,11 +1151,7 @@ impl DoctorSection {
     }
 }
 
-fn cmd_doctor(
-    paths: &DarpPaths,
-    config: &Config,
-    engine: &Engine,
-) -> anyhow::Result<()> {
+fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow::Result<()> {
     println!("Darp Doctor");
 
     let mut issue_count = 0u32;
@@ -1264,7 +1238,10 @@ fn cmd_doctor(
         }
 
         if engine.is_engine_installed() {
-            s.ok(&format!("{} binary found in PATH", engine.bin.unwrap_or("(none)")));
+            s.ok(&format!(
+                "{} binary found in PATH",
+                engine.bin.unwrap_or("(none)")
+            ));
         } else if engine.bin.is_some() {
             s.fail(&format!("{} binary not found in PATH", engine.bin.unwrap()));
         }
@@ -1273,10 +1250,7 @@ fn cmd_doctor(
         if engine_ready {
             s.ok(&format!("{} is running", engine.bin.unwrap_or("engine")));
         } else if engine.bin.is_some() {
-            s.warn(&format!(
-                "{} is not running",
-                engine.bin.unwrap()
-            ));
+            s.warn(&format!("{} is not running", engine.bin.unwrap()));
         }
 
         if !s.passed() {
@@ -1369,7 +1343,9 @@ fn cmd_doctor(
                             if contents.contains(RC_START_MARKER) {
                                 s.ok(".bashrc contains darp completion block");
                             } else {
-                                s.warn(".bashrc missing darp completion block — run 'darp install'");
+                                s.warn(
+                                    ".bashrc missing darp completion block — run 'darp install'",
+                                );
                             }
                         }
                     }
@@ -1401,7 +1377,10 @@ fn cmd_doctor(
                     }
                 }
                 Some(other) => {
-                    s.warn(&format!("Shell '{}' — completions not automatically managed", other));
+                    s.warn(&format!(
+                        "Shell '{}' — completions not automatically managed",
+                        other
+                    ));
                 }
                 None => {
                     s.warn("Could not detect shell from $SHELL");
@@ -1526,14 +1505,12 @@ fn cmd_doctor(
                 Ok(contents) => {
                     if let Ok(portmap) = serde_json::from_str::<serde_json::Value>(&contents) {
                         let domain_count = portmap.as_object().map_or(0, |o| o.len());
-                        let service_count: usize = portmap
-                            .as_object()
-                            .map_or(0, |o| {
-                                o.values()
-                                    .filter_map(|v| v.as_object())
-                                    .map(|m| m.len())
-                                    .sum()
-                            });
+                        let service_count: usize = portmap.as_object().map_or(0, |o| {
+                            o.values()
+                                .filter_map(|v| v.as_object())
+                                .map(|m| m.len())
+                                .sum()
+                        });
                         s.ok(&format!(
                             "portmap.json valid ({} domain(s), {} service(s))",
                             domain_count, service_count
@@ -1668,12 +1645,9 @@ fn cmd_check_image(
         .or_else(|| group_opt.and_then(|g| g.default_environment.clone()))
         .or_else(|| domain_opt.and_then(|d| d.default_environment.clone()));
 
-    let env = effective_env_name.as_ref().and_then(|name| {
-        config
-            .environments
-            .as_ref()
-            .and_then(|e| e.get(name))
-    });
+    let env = effective_env_name
+        .as_ref()
+        .and_then(|name| config.environments.as_ref().and_then(|e| e.get(name)));
 
     // Resolve image
     let image_name = if let Some(img) = image_cli {
@@ -1687,9 +1661,7 @@ fn cmd_check_image(
             .or_else(|| env.and_then(|e| e.default_container_image.as_deref()));
 
         match base {
-            Some(img) => {
-                config.resolve_image_name(env, group_opt, domain_opt, service_opt, img)
-            }
+            Some(img) => config.resolve_image_name(env, group_opt, domain_opt, service_opt, img),
             None => {
                 eprintln!(
                     "No image specified and none could be resolved from current directory.\n\
@@ -1783,10 +1755,7 @@ fn cmd_check_image(
                     _ => {
                         s.fail(&format!("{} could not be found or pulled", image_name));
                         s.print();
-                        println!(
-                            "\n{}",
-                            "Cannot continue — image is not available.".red()
-                        );
+                        println!("\n{}", "Cannot continue — image is not available.".red());
                         return Ok(());
                     }
                 }
@@ -1810,9 +1779,7 @@ fn cmd_check_image(
         .output();
 
     let probe_output = match output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
         Ok(out) => {
             // sh might not exist — the container itself failed to start with sh
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1874,9 +1841,7 @@ fn cmd_check_image(
         if results.get("nginx").copied().unwrap_or(false) {
             s.ok("nginx is available");
         } else {
-            s.warn(
-                "nginx not found — container-level reverse proxy will be skipped",
-            );
+            s.warn("nginx not found — container-level reverse proxy will be skipped");
             s.warn("Install nginx in your Dockerfile for full .test domain support inside the container");
         }
         if !s.passed() {
@@ -1917,7 +1882,10 @@ fn cmd_check_image(
     // Shell command
     {
         let effective_shell = shell_command.unwrap_or("sh");
-        let binary = effective_shell.split_whitespace().next().unwrap_or(effective_shell);
+        let binary = effective_shell
+            .split_whitespace()
+            .next()
+            .unwrap_or(effective_shell);
         let mut s = DoctorSection::new(&format!("Shell command ({})", effective_shell));
         if binary == "sh" {
             // Already checked above
@@ -1950,11 +1918,7 @@ fn cmd_check_image(
     } else {
         println!(
             "{}",
-            format!(
-                "{} section(s) with issues.",
-                issue_count
-            )
-            .yellow()
+            format!("{} section(s) with issues.", issue_count).yellow()
         );
     }
 
@@ -2015,39 +1979,38 @@ fn cmd_deploy(
         let groups = domain.groups.as_ref();
 
         // Helper closure to register a service folder
-        let register_service =
-            |folder_name: &str,
-             port_number: &mut u16,
-             domain_map: &mut serde_json::Map<String, serde_json::Value>,
-             hosts_container_lines: &mut Vec<String>|
-             -> anyhow::Result<()> {
-                domain_map.insert(
-                    folder_name.to_string(),
-                    serde_json::Value::Number((*port_number).into()),
-                );
+        let register_service = |folder_name: &str,
+                                port_number: &mut u16,
+                                domain_map: &mut serde_json::Map<String, serde_json::Value>,
+                                hosts_container_lines: &mut Vec<String>|
+         -> anyhow::Result<()> {
+            domain_map.insert(
+                folder_name.to_string(),
+                serde_json::Value::Number((*port_number).into()),
+            );
 
-                let url = format!(
-                    "{folder}.{domain}.test",
-                    folder = folder_name,
-                    domain = domain_name
-                );
+            let url = format!(
+                "{folder}.{domain}.test",
+                folder = folder_name,
+                domain = domain_name
+            );
 
-                hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
+            hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
 
-                let vhost = host_proxy_template
-                    .replace("{url}", &url)
-                    .replace("{host_gateway}", host_gateway)
-                    .replace("{port}", &port_number.to_string());
+            let vhost = host_proxy_template
+                .replace("{url}", &url)
+                .replace("{host_gateway}", host_gateway)
+                .replace("{port}", &port_number.to_string());
 
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&paths.vhost_container_conf)?
-                    .write_all(vhost.as_bytes())?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&paths.vhost_container_conf)?
+                .write_all(vhost.as_bytes())?;
 
-                *port_number += 1;
-                Ok(())
-            };
+            *port_number += 1;
+            Ok(())
+        };
 
         // Scan "." group: direct children of domain location, excluding group subdirs
         if groups.map_or(true, |g| g.contains_key(".")) {
@@ -2127,12 +2090,9 @@ fn cmd_shell(
         .to_string_lossy()
         .to_string();
 
-    let (domain_name, domain, _group_name, group_opt) = config
-        .find_context_by_cwd(&current_dir)
-        .unwrap_or_else(|| {
-            eprintln!(
-                "Current directory does not exist in any darp domain configuration."
-            );
+    let (domain_name, domain, _group_name, group_opt) =
+        config.find_context_by_cwd(&current_dir).unwrap_or_else(|| {
+            eprintln!("Current directory does not exist in any darp domain configuration.");
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
@@ -2171,7 +2131,10 @@ fn cmd_shell(
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
+        .arg(format!(
+            "{}:/etc/hosts",
+            paths.hosts_container_path.display()
+        ))
         .arg("-v")
         .arg(format!(
             "{}:/etc/nginx/nginx.conf",
@@ -2211,8 +2174,11 @@ fn cmd_shell(
 
     if let Some(pm) = host_portmaps {
         for (host_port, container_port) in pm {
-            cmd.arg("-p")
-                .arg(format!("{host}:{container}", host = host_port, container = container_port));
+            cmd.arg("-p").arg(format!(
+                "{host}:{container}",
+                host = host_port,
+                container = container_port
+            ));
         }
     }
 
@@ -2271,7 +2237,13 @@ fn cmd_shell(
         "shell",
     );
 
-    let image_name = config.resolve_image_name(env.as_ref(), group_opt, Some(domain), service_opt, &base_image);
+    let image_name = config.resolve_image_name(
+        env.as_ref(),
+        group_opt,
+        Some(domain),
+        service_opt,
+        &base_image,
+    );
 
     let shell_command = service_opt
         .and_then(|s| s.shell_command.as_deref())
@@ -2321,12 +2293,9 @@ fn cmd_serve(
         .to_string_lossy()
         .to_string();
 
-    let (domain_name, domain, _group_name, group_opt) = config
-        .find_context_by_cwd(&current_dir)
-        .unwrap_or_else(|| {
-            eprintln!(
-                "Current directory does not exist in any darp domain configuration."
-            );
+    let (domain_name, domain, _group_name, group_opt) =
+        config.find_context_by_cwd(&current_dir).unwrap_or_else(|| {
+            eprintln!("Current directory does not exist in any darp domain configuration.");
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
@@ -2346,8 +2315,7 @@ fn cmd_serve(
                 "Environment is required for 'darp serve' in domain '{}'.\n\
 Either pass an explicit environment:\n  darp serve --environment <env>\n\
 or configure a default_environment for this domain:\n  darp config set dom default-environment {} <env>",
-                domain_name,
-                domain_name
+                domain_name, domain_name
             );
             std::process::exit(1);
         }
@@ -2396,7 +2364,10 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     cmd.arg("-v")
         .arg(format!("{}:/app", current_dir.display()))
         .arg("-v")
-        .arg(format!("{}:/etc/hosts", paths.hosts_container_path.display()))
+        .arg(format!(
+            "{}:/etc/hosts",
+            paths.hosts_container_path.display()
+        ))
         .arg("-v")
         .arg(format!(
             "{}:/etc/nginx/nginx.conf",
@@ -2436,8 +2407,11 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
 
     if let Some(pm) = host_portmaps {
         for (host_port, container_port) in pm {
-            cmd.arg("-p")
-                .arg(format!("{host}:{container}", host = host_port, container = container_port));
+            cmd.arg("-p").arg(format!(
+                "{host}:{container}",
+                host = host_port,
+                container = container_port
+            ));
         }
     }
 
@@ -2496,7 +2470,8 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         "serve",
     );
 
-    let image_name = config.resolve_image_name(Some(env), group_opt, Some(domain), service_opt, &base_image);
+    let image_name =
+        config.resolve_image_name(Some(env), group_opt, Some(domain), service_opt, &base_image);
 
     let inner_cmd = format!(
         r#"if command -v nginx >/dev/null 2>&1; then
@@ -2526,9 +2501,7 @@ fn cmd_set(
     _engine_kind: &EngineKind,
 ) -> anyhow::Result<()> {
     match cmd {
-        SetCommand::PodmanMachine {
-            new_podman_machine,
-        } => {
+        SetCommand::PodmanMachine { new_podman_machine } => {
             // Persist in config.json; env var is optional and legacy now.
             config.podman_machine = Some(new_podman_machine.clone());
             config.save(&paths.config_path)?;
@@ -2630,7 +2603,12 @@ fn cmd_set(
                 service_name,
                 serve_command,
             } => {
-                config.set_service_serve_command(&domain_name, &group_name, &service_name, &serve_command)?;
+                config.set_service_serve_command(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                    &serve_command,
+                )?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set serve_command for service '{}.{}' to:\n  {}",
@@ -2643,7 +2621,12 @@ fn cmd_set(
                 service_name,
                 shell_command,
             } => {
-                config.set_service_shell_command(&domain_name, &group_name, &service_name, &shell_command)?;
+                config.set_service_shell_command(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                    &shell_command,
+                )?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set shell_command for service '{}.{}' to:\n  {}",
@@ -2742,7 +2725,8 @@ fn cmd_set(
                 domain_name,
                 default_container_image,
             } => {
-                config.set_domain_default_container_image(&domain_name, &default_container_image)?;
+                config
+                    .set_domain_default_container_image(&domain_name, &default_container_image)?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set default_container_image for domain '{}' to:\n  {}",
@@ -2756,7 +2740,11 @@ fn cmd_set(
                 group_name,
                 default_environment,
             } => {
-                config.set_group_default_environment(&domain_name, &group_name, &default_environment)?;
+                config.set_group_default_environment(
+                    &domain_name,
+                    &group_name,
+                    &default_environment,
+                )?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set default_environment for group '{}' in domain '{}' to '{}'",
@@ -2816,7 +2804,11 @@ fn cmd_set(
                 group_name,
                 default_container_image,
             } => {
-                config.set_group_default_container_image(&domain_name, &group_name, &default_container_image)?;
+                config.set_group_default_container_image(
+                    &domain_name,
+                    &group_name,
+                    &default_container_image,
+                )?;
                 config.save(&paths.config_path)?;
                 println!(
                     "Set default_container_image for group '{}' in domain '{}' to:\n  {}",
@@ -2842,7 +2834,10 @@ fn cmd_set(
 
 fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Result<()> {
     match cmd {
-        AddCommand::PreConfig { location, repo_location } => {
+        AddCommand::PreConfig {
+            location,
+            repo_location,
+        } => {
             config.add_pre_config(&location, repo_location.as_deref())?;
             config.save(&paths.config_path)?;
             println!("Added pre_config '{}'", location);
@@ -2947,7 +2942,13 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 host_port,
                 container_port,
             } => {
-                config.add_portmap(&domain_name, &group_name, &service_name, &host_port, &container_port)?;
+                config.add_portmap(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                    &host_port,
+                    &container_port,
+                )?;
                 config.save(&paths.config_path)?;
             }
             AddSvcCommand::Variable {
@@ -2967,7 +2968,13 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 container_dir,
                 host_dir,
             } => {
-                config.add_service_volume(&domain_name, &group_name, &service_name, &container_dir, &host_dir)?;
+                config.add_service_volume(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                    &container_dir,
+                    &host_dir,
+                )?;
                 config.save(&paths.config_path)?;
             }
         },
@@ -2976,11 +2983,7 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
     Ok(())
 }
 
-fn cmd_rm(
-    cmd: RmCommand,
-    paths: &DarpPaths,
-    config: &mut Config,
-) -> anyhow::Result<()> {
+fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Result<()> {
     match cmd {
         RmCommand::PodmanMachine {} => {
             // Clear from config.json
@@ -3009,10 +3012,7 @@ fn cmd_rm(
                 config.rm_domain_portmap(&domain_name, &host_port)?;
                 config.save(&paths.config_path)?;
             }
-            RmDomCommand::Variable {
-                domain_name,
-                name,
-            } => {
+            RmDomCommand::Variable { domain_name, name } => {
                 config.rm_domain_variable(&domain_name, &name)?;
                 config.save(&paths.config_path)?;
             }
@@ -3133,10 +3133,7 @@ fn cmd_rm(
                 config.rm_env_portmap(&environment, &host_port)?;
                 config.save(&paths.config_path)?;
             }
-            RmEnvCommand::Variable {
-                environment,
-                name,
-            } => {
+            RmEnvCommand::Variable { environment, name } => {
                 config.rm_env_variable(&environment, &name)?;
                 config.save(&paths.config_path)?;
             }
@@ -3195,7 +3192,13 @@ fn cmd_rm(
                 container_dir,
                 host_dir,
             } => {
-                config.rm_service_volume(&domain_name, &group_name, &service_name, &container_dir, &host_dir)?;
+                config.rm_service_volume(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                    &container_dir,
+                    &host_dir,
+                )?;
                 config.save(&paths.config_path)?;
             }
             RmSvcCommand::ServeCommand {
@@ -3235,7 +3238,11 @@ fn cmd_rm(
                 group_name,
                 service_name,
             } => {
-                config.rm_service_default_container_image(&domain_name, &group_name, &service_name)?;
+                config.rm_service_default_container_image(
+                    &domain_name,
+                    &group_name,
+                    &service_name,
+                )?;
                 config.save(&paths.config_path)?;
             }
         },
@@ -3244,10 +3251,7 @@ fn cmd_rm(
     Ok(())
 }
 
-fn cmd_show(
-    environment_cli: Option<String>,
-    config: &Config,
-) -> anyhow::Result<()> {
+fn cmd_show(environment_cli: Option<String>, config: &Config) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     let current_directory_name = current_dir
         .file_name()
@@ -3255,12 +3259,9 @@ fn cmd_show(
         .to_string_lossy()
         .to_string();
 
-    let (domain_name, domain, group_name, group_opt) = config
-        .find_context_by_cwd(&current_dir)
-        .unwrap_or_else(|| {
-            eprintln!(
-                "Current directory does not exist in any darp domain configuration."
-            );
+    let (domain_name, domain, group_name, group_opt) =
+        config.find_context_by_cwd(&current_dir).unwrap_or_else(|| {
+            eprintln!("Current directory does not exist in any darp domain configuration.");
             std::process::exit(1);
         });
     let domain_name = domain_name.to_string();
