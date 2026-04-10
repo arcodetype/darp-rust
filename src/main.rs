@@ -983,7 +983,9 @@ fn add_platform_args(cmd: &mut std::process::Command, engine: &Engine, platform:
 /// 1) CLI-provided image
 /// 2) service.default_container_image
 /// 3) environment.default_container_image
+///
 /// If none are set, print a helpful message and exit(1).
+#[allow(clippy::too_many_arguments)]
 fn resolve_base_image(
     cli_image: Option<&str>,
     env: Option<&Environment>,
@@ -1421,7 +1423,7 @@ fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow::Re
                                 // Count "." group services
                                 if let Ok(entries) = fs::read_dir(&loc) {
                                     for entry in entries.flatten() {
-                                        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+                                        if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                                             let entry_name =
                                                 entry.file_name().to_string_lossy().to_string();
                                             if !group_names.contains(&entry_name) {
@@ -1435,7 +1437,7 @@ fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow::Re
                                     let gp = loc.join(gn);
                                     if let Ok(entries) = fs::read_dir(&gp) {
                                         for entry in entries.flatten() {
-                                            if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+                                            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                                                 service_count += 1;
                                             }
                                         }
@@ -1461,7 +1463,7 @@ fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow::Re
                                     let env_exists = config
                                         .environments
                                         .as_ref()
-                                        .map_or(false, |e| e.contains_key(env_name));
+                                        .is_some_and(|e| e.contains_key(env_name));
                                     if !env_exists {
                                         s.warn(&format!(
                                             "{} — default_environment '{}' does not exist",
@@ -2013,7 +2015,7 @@ fn cmd_deploy(
         };
 
         // Scan "." group: direct children of domain location, excluding group subdirs
-        if groups.map_or(true, |g| g.contains_key(".")) {
+        if groups.is_none_or(|g| g.contains_key(".")) {
             if let Ok(entries) = std::fs::read_dir(&location) {
                 for entry in entries {
                     let entry = entry?;
@@ -2150,7 +2152,7 @@ fn cmd_shell(
     let effective_volumes = service_opt
         .and_then(|s| s.volumes.as_ref())
         .or_else(|| group_opt.and_then(|g| g.volumes.as_ref()))
-        .or_else(|| domain.volumes.as_ref())
+        .or(domain.volumes.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.volumes.as_ref()));
 
     if let Some(vols) = effective_volumes {
@@ -2169,7 +2171,7 @@ fn cmd_shell(
     let host_portmaps = service_opt
         .and_then(|s| s.host_portmappings.as_ref())
         .or_else(|| group_opt.and_then(|g| g.host_portmappings.as_ref()))
-        .or_else(|| domain.host_portmappings.as_ref())
+        .or(domain.host_portmappings.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.host_portmappings.as_ref()));
 
     if let Some(pm) = host_portmaps {
@@ -2186,7 +2188,7 @@ fn cmd_shell(
     let variables = service_opt
         .and_then(|s| s.variables.as_ref())
         .or_else(|| group_opt.and_then(|g| g.variables.as_ref()))
-        .or_else(|| domain.variables.as_ref())
+        .or(domain.variables.as_ref())
         .or_else(|| env.as_ref().and_then(|e| e.variables.as_ref()));
 
     if let Some(v) = variables {
@@ -2200,7 +2202,7 @@ fn cmd_shell(
     let platform = service_opt
         .and_then(|s| s.platform.as_deref())
         .or_else(|| group_opt.and_then(|g| g.platform.as_deref()))
-        .or_else(|| domain.platform.as_deref())
+        .or(domain.platform.as_deref())
         .or_else(|| env.as_ref().and_then(|e| e.platform.as_deref()));
 
     if let Some(platform) = platform {
@@ -2248,7 +2250,7 @@ fn cmd_shell(
     let shell_command = service_opt
         .and_then(|s| s.shell_command.as_deref())
         .or_else(|| group_opt.and_then(|g| g.shell_command.as_deref()))
-        .or_else(|| domain.shell_command.as_deref())
+        .or(domain.shell_command.as_deref())
         .or_else(|| env.as_ref().and_then(|e| e.shell_command.as_deref()))
         .unwrap_or("sh");
 
@@ -2333,8 +2335,8 @@ or configure a default_environment for this domain:\n  darp config set dom defau
     let serve_command = service_opt
         .and_then(|svc| svc.serve_command.as_deref())
         .or_else(|| group_opt.and_then(|g| g.serve_command.as_deref()))
-        .or_else(|| domain.serve_command.as_deref())
-        .or_else(|| env.serve_command.as_deref())
+        .or(domain.serve_command.as_deref())
+        .or(env.serve_command.as_deref())
         .unwrap_or_else(|| {
             eprintln!(
                 "Neither service '{}.{}', domain '{}', nor environment '{}' has a serve_command configured.\n\
@@ -2383,8 +2385,8 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let effective_volumes = service_opt
         .and_then(|s| s.volumes.as_ref())
         .or_else(|| group_opt.and_then(|g| g.volumes.as_ref()))
-        .or_else(|| domain.volumes.as_ref())
-        .or_else(|| env.volumes.as_ref());
+        .or(domain.volumes.as_ref())
+        .or(env.volumes.as_ref());
 
     if let Some(vols) = effective_volumes {
         for v in vols {
@@ -2402,8 +2404,8 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let host_portmaps = service_opt
         .and_then(|s| s.host_portmappings.as_ref())
         .or_else(|| group_opt.and_then(|g| g.host_portmappings.as_ref()))
-        .or_else(|| domain.host_portmappings.as_ref())
-        .or_else(|| env.host_portmappings.as_ref());
+        .or(domain.host_portmappings.as_ref())
+        .or(env.host_portmappings.as_ref());
 
     if let Some(pm) = host_portmaps {
         for (host_port, container_port) in pm {
@@ -2419,8 +2421,8 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let variables = service_opt
         .and_then(|s| s.variables.as_ref())
         .or_else(|| group_opt.and_then(|g| g.variables.as_ref()))
-        .or_else(|| domain.variables.as_ref())
-        .or_else(|| env.variables.as_ref());
+        .or(domain.variables.as_ref())
+        .or(env.variables.as_ref());
 
     if let Some(v) = variables {
         for (name, value) in v {
@@ -2433,8 +2435,8 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
     let platform = service_opt
         .and_then(|svc| svc.platform.as_deref())
         .or_else(|| group_opt.and_then(|g| g.platform.as_deref()))
-        .or_else(|| domain.platform.as_deref())
-        .or_else(|| env.platform.as_deref());
+        .or(domain.platform.as_deref())
+        .or(env.platform.as_deref());
 
     if let Some(platform) = platform {
         add_platform_args(&mut cmd, engine, platform);

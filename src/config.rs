@@ -279,9 +279,9 @@ impl Config {
             .iter()
             .find(|(_name, d)| {
                 resolve_location(&d.location)
-                    .and_then(|loc| {
+                    .map(|loc| {
                         let canonical = fs::canonicalize(&loc).unwrap_or(loc);
-                        Ok(canonical.to_string_lossy().to_string() == canonical_path)
+                        canonical.to_string_lossy() == canonical_path
                     })
                     .unwrap_or(false)
             })
@@ -1571,9 +1571,7 @@ impl Config {
 
     pub fn set_serve_command(&mut self, env_name: &str, cmd: &str) -> Result<()> {
         let envs = self.environments.get_or_insert_with(BTreeMap::new);
-        let env = envs
-            .entry(env_name.to_string())
-            .or_insert_with(Environment::default);
+        let env = envs.entry(env_name.to_string()).or_default();
 
         env.serve_command = Some(cmd.to_string());
         Ok(())
@@ -1841,9 +1839,7 @@ impl Config {
         container_port: &str,
     ) -> Result<()> {
         let envs = self.environments.get_or_insert_with(BTreeMap::new);
-        let env = envs
-            .entry(env_name.to_string())
-            .or_insert_with(Environment::default);
+        let env = envs.entry(env_name.to_string()).or_default();
 
         let maps = env.variables.get_or_insert_with(BTreeMap::new);
 
@@ -2012,9 +2008,7 @@ impl Config {
         container_port: &str,
     ) -> Result<()> {
         let envs = self.environments.get_or_insert_with(BTreeMap::new);
-        let env = envs
-            .entry(env_name.to_string())
-            .or_insert_with(Environment::default);
+        let env = envs.entry(env_name.to_string()).or_default();
 
         let maps = env.host_portmappings.get_or_insert_with(BTreeMap::new);
 
@@ -2074,9 +2068,7 @@ impl Config {
         host_dir: &str,
     ) -> Result<()> {
         let envs = self.environments.get_or_insert_with(BTreeMap::new);
-        let env = envs
-            .entry(env_name.to_string())
-            .or_insert_with(Environment::default);
+        let env = envs.entry(env_name.to_string()).or_default();
 
         let vols = env.volumes.get_or_insert_with(Vec::new);
         let new_vol = Volume {
