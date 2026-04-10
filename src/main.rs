@@ -66,6 +66,14 @@ enum Command {
     Uninstall,
     /// Check system health and configuration
     Doctor,
+    /// Validate a container image works with darp
+    CheckImage {
+        /// Container image to check (if omitted, resolves from current directory context)
+        image: Option<String>,
+        /// Environment name (used to resolve serve_command and shell_command)
+        #[arg(short, long)]
+        environment: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -706,6 +714,9 @@ fn main() -> anyhow::Result<()> {
                     } => cmd_serve(environment, dry_run, container_image, &paths, &config, &engine)?,
                     Command::Urls => cmd_urls(&paths, &config)?,
                     Command::Doctor => cmd_doctor(&paths, &config, &engine)?,
+                    Command::CheckImage { image, environment } => {
+                        cmd_check_image(image, environment, &paths, &config, &engine)?
+                    }
                     Command::Config { .. } => unreachable!(),
                 }
             }
@@ -1614,6 +1625,333 @@ fn cmd_doctor(
             "{}",
             format!(
                 "{} section(s) with issues. Run the suggested commands to fix them.",
+                issue_count
+            )
+            .yellow()
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_check_image(
+    image_cli: Option<String>,
+    environment_cli: Option<String>,
+    _paths: &DarpPaths,
+    config: &Config,
+    engine: &Engine,
+) -> anyhow::Result<()> {
+    engine.require_ready()?;
+
+    // Resolve context from cwd if possible
+    let current_dir = std::env::current_dir()?;
+    let context = config.find_context_by_cwd(&current_dir);
+
+    let current_directory_name = current_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    // Resolve environment
+    let (domain_opt, group_opt, service_opt) = match &context {
+        Some((_dn, domain, _gn, group)) => {
+            let svc = group
+                .and_then(|g| g.services.as_ref())
+                .and_then(|s| s.get(&current_directory_name));
+            (Some(*domain), *group, svc)
+        }
+        None => (None, None, None),
+    };
+
+    let effective_env_name = environment_cli
+        .or_else(|| group_opt.and_then(|g| g.default_environment.clone()))
+        .or_else(|| domain_opt.and_then(|d| d.default_environment.clone()));
+
+    let env = effective_env_name.as_ref().and_then(|name| {
+        config
+            .environments
+            .as_ref()
+            .and_then(|e| e.get(name))
+    });
+
+    // Resolve image
+    let image_name = if let Some(img) = image_cli {
+        img
+    } else {
+        // Try to resolve from context
+        let base = service_opt
+            .and_then(|s| s.default_container_image.as_deref())
+            .or_else(|| group_opt.and_then(|g| g.default_container_image.as_deref()))
+            .or_else(|| domain_opt.and_then(|d| d.default_container_image.as_deref()))
+            .or_else(|| env.and_then(|e| e.default_container_image.as_deref()));
+
+        match base {
+            Some(img) => {
+                config.resolve_image_name(env, group_opt, domain_opt, service_opt, img)
+            }
+            None => {
+                eprintln!(
+                    "No image specified and none could be resolved from current directory.\n\
+                     Usage: darp check-image <image>"
+                );
+                std::process::exit(1);
+            }
+        }
+    };
+
+    // Resolve serve_command and shell_command from cascade
+    let serve_command = service_opt
+        .and_then(|s| s.serve_command.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.serve_command.as_deref()))
+        .or_else(|| domain_opt.and_then(|d| d.serve_command.as_deref()))
+        .or_else(|| env.and_then(|e| e.serve_command.as_deref()));
+
+    let shell_command = service_opt
+        .and_then(|s| s.shell_command.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.shell_command.as_deref()))
+        .or_else(|| domain_opt.and_then(|d| d.shell_command.as_deref()))
+        .or_else(|| env.and_then(|e| e.shell_command.as_deref()));
+
+    println!("Darp Image Check: {}\n", image_name.cyan());
+
+    let mut issue_count = 0u32;
+
+    // Build a diagnostic script that probes the image
+    // Each check outputs a structured line: DARP_CHECK:<name>:<ok|missing>
+    let mut probe_lines = Vec::new();
+    probe_lines.push(r#"command -v sh >/dev/null 2>&1 && echo "DARP_CHECK:sh:ok" || echo "DARP_CHECK:sh:missing""#.to_string());
+    probe_lines.push(r#"command -v nginx >/dev/null 2>&1 && echo "DARP_CHECK:nginx:ok" || echo "DARP_CHECK:nginx:missing""#.to_string());
+
+    if let Some(cmd) = serve_command {
+        let binary = cmd.split_whitespace().next().unwrap_or(cmd);
+        if !binary.is_empty() {
+            probe_lines.push(format!(
+                r#"command -v {bin} >/dev/null 2>&1 && echo "DARP_CHECK:serve_cmd:{bin}:ok" || echo "DARP_CHECK:serve_cmd:{bin}:missing""#,
+                bin = binary
+            ));
+        }
+    }
+
+    if let Some(cmd) = shell_command {
+        let binary = cmd.split_whitespace().next().unwrap_or(cmd);
+        if !binary.is_empty() && binary != "sh" {
+            probe_lines.push(format!(
+                r#"command -v {bin} >/dev/null 2>&1 && echo "DARP_CHECK:shell_cmd:{bin}:ok" || echo "DARP_CHECK:shell_cmd:{bin}:missing""#,
+                bin = binary
+            ));
+        }
+    }
+
+    let probe_script = probe_lines.join("; ");
+
+    let bin = engine.bin.expect("engine bin not set");
+
+    // First check if the image exists locally or can be pulled
+    {
+        let mut s = DoctorSection::new("Image");
+
+        let inspect = std::process::Command::new(bin)
+            .arg("image")
+            .arg("inspect")
+            .arg(&image_name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        match inspect {
+            Ok(status) if status.success() => {
+                s.ok(&format!("{} found locally", image_name));
+            }
+            _ => {
+                s.warn(&format!(
+                    "{} not found locally — will attempt to pull",
+                    image_name
+                ));
+
+                let pull = std::process::Command::new(bin)
+                    .arg("pull")
+                    .arg(&image_name)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .status();
+
+                match pull {
+                    Ok(status) if status.success() => {
+                        s.ok(&format!("{} pulled successfully", image_name));
+                    }
+                    _ => {
+                        s.fail(&format!("{} could not be found or pulled", image_name));
+                        s.print();
+                        println!(
+                            "\n{}",
+                            "Cannot continue — image is not available.".red()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // Run the diagnostic container
+    let output = std::process::Command::new(bin)
+        .arg("run")
+        .arg("--rm")
+        .arg(&image_name)
+        .arg("sh")
+        .arg("-c")
+        .arg(&probe_script)
+        .output();
+
+    let probe_output = match output {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).to_string()
+        }
+        Ok(out) => {
+            // sh might not exist — the container itself failed to start with sh
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let mut s = DoctorSection::new("Shell support");
+            s.fail(&format!(
+                "Container failed to start with 'sh' — image may not have a shell: {}",
+                stderr.lines().next().unwrap_or("unknown error")
+            ));
+            issue_count += 1;
+            s.print();
+            println!(
+                "\n{}",
+                "Cannot continue — 'sh' is required for darp to function.".red()
+            );
+            println!(
+                "\n{} section(s) with issues.",
+                issue_count.to_string().yellow()
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("Failed to run diagnostic container: {}", e);
+            return Ok(());
+        }
+    };
+
+    // Parse results
+    let mut results: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for line in probe_output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("DARP_CHECK:") {
+            let is_ok = rest.ends_with(":ok");
+            let key = if is_ok {
+                rest.trim_end_matches(":ok")
+            } else {
+                rest.trim_end_matches(":missing")
+            };
+            results.insert(key.to_string(), is_ok);
+        }
+    }
+
+    // Shell support
+    {
+        let mut s = DoctorSection::new("Shell support");
+        if results.get("sh").copied().unwrap_or(false) {
+            s.ok("sh is available (required)");
+        } else {
+            s.fail("sh not found — darp requires sh to run commands in containers");
+        }
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // Nginx
+    {
+        let mut s = DoctorSection::new("Nginx (in-container reverse proxy)");
+        if results.get("nginx").copied().unwrap_or(false) {
+            s.ok("nginx is available");
+        } else {
+            s.warn(
+                "nginx not found — container-level reverse proxy will be skipped",
+            );
+            s.warn("Install nginx in your Dockerfile for full .test domain support inside the container");
+        }
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // Serve command
+    let serve_binary = serve_command.and_then(|c| {
+        let b = c.split_whitespace().next().unwrap_or(c);
+        if b.is_empty() { None } else { Some((c, b)) }
+    });
+    if let Some((cmd, binary)) = serve_binary {
+        let key = format!("serve_cmd:{}", binary);
+        let mut s = DoctorSection::new(&format!("Serve command ({})", cmd));
+        if results.get(&key).copied().unwrap_or(false) {
+            s.ok(&format!("'{}' is available", binary));
+        } else {
+            s.fail(&format!(
+                "'{}' not found in image — 'darp serve' will fail",
+                binary
+            ));
+        }
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    } else {
+        let mut s = DoctorSection::new("Serve command");
+        s.warn("No serve_command configured — skipping check");
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // Shell command
+    {
+        let effective_shell = shell_command.unwrap_or("sh");
+        let binary = effective_shell.split_whitespace().next().unwrap_or(effective_shell);
+        let mut s = DoctorSection::new(&format!("Shell command ({})", effective_shell));
+        if binary == "sh" {
+            // Already checked above
+            if results.get("sh").copied().unwrap_or(false) {
+                s.ok(&format!("'{}' is available", binary));
+            } else {
+                s.fail(&format!("'{}' not found", binary));
+            }
+        } else {
+            let key = format!("shell_cmd:{}", binary);
+            if results.get(&key).copied().unwrap_or(false) {
+                s.ok(&format!("'{}' is available", binary));
+            } else {
+                s.fail(&format!(
+                    "'{}' not found in image — 'darp shell' will fall back to sh",
+                    binary
+                ));
+            }
+        }
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // Summary
+    println!();
+    if issue_count == 0 {
+        println!("{}", "Image is fully compatible with darp.".green());
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{} section(s) with issues.",
                 issue_count
             )
             .yellow()

@@ -78,6 +78,23 @@ Run this when something isn't working to quickly identify what's misconfigured.
 darp doctor
 ```
 
+### `darp check-image`
+
+Validates that a container image is compatible with darp. Spins up a quick diagnostic container and checks for:
+
+- `sh` — required for darp to run commands inside the container
+- `nginx` — enables in-container reverse proxy for `.test` domains
+- Your configured `serve_command` binary (e.g. `air`, `php`, `npm`)
+- Your configured `shell_command` binary
+
+If run from inside a service directory, the image and commands are resolved automatically from your configuration. Otherwise, pass an image name directly.
+
+```sh
+darp check-image                   # resolve image from current directory context
+darp check-image golang:1.25       # check a specific image
+darp check-image -e go my-image    # check with a specific environment
+```
+
 ## Configuration Commands
 
 ### `darp config show`
