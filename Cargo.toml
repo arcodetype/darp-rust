@@ -1,6 +1,6 @@
 [package]
 name = "darp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"
 description = "Directories auto-reverse proxied — turn local project folders into .test domains with Docker/Podman"
