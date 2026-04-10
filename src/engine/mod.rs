@@ -194,6 +194,17 @@ impl Engine {
         false
     }
 
+    pub fn is_engine_installed(&self) -> bool {
+        let Some(bin) = self.bin else { return false };
+        Command::new("which")
+            .arg(bin)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     pub fn start_reverse_proxy(&self, paths: &DarpPaths) -> Result<()> {
         let Some(bin) = self.bin else { return Ok(()) };
         const REVERSE_PROXY: &str = "darp-reverse-proxy";

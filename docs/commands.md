@@ -59,6 +59,25 @@ Lists all registered URLs and their ports.
 darp urls
 ```
 
+### `darp doctor`
+
+Checks your system health and darp configuration. Verifies:
+
+- Darp root directory and core files (config.json, nginx.conf, dnsmasq config)
+- Container engine installation and status
+- DNS resolver configuration (/etc/resolver/test)
+- Infrastructure containers (reverse proxy, dnsmasq)
+- Shell completions
+- Domain configurations and filesystem state
+- Deploy artifacts (portmap, vhost config)
+- Environment definitions
+
+Run this when something isn't working to quickly identify what's misconfigured.
+
+```sh
+darp doctor
+```
+
 ## Configuration Commands
 
 ### `darp config show`
