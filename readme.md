@@ -1,21 +1,53 @@
 # darp
 
+[![CI](https://github.com/arcodetype/darp-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/arcodetype/darp-rust/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/darp.svg)](https://crates.io/crates/darp)
+[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/darp.svg)](LICENSE-MIT)
+
 **darp** (<b>d</b>irectories <b>a</b>uto-<b>r</b>everse <b>p</b>roxied) turns local project folders into `.test` domains automatically. Point darp at a folder, and every subdirectory gets its own URL (e.g. `hello-world.projects.test`) backed by Docker/Podman, nginx, and dnsmasq.
 
 No YAML files. No port juggling. Just `cd` into a project and run `darp serve`.
+
+## Install
+
+### From crates.io
+
+```sh
+cargo install darp
+```
+
+### Pre-built binaries
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/arcodetype/darp-rust/releases), extract, and place `darp` somewhere in your `$PATH`:
+
+```sh
+# macOS (Apple Silicon)
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv darp-*/darp /usr/local/bin/
+
+# macOS (Intel)
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-x86_64-apple-darwin.tar.gz | tar xz
+sudo mv darp-*/darp /usr/local/bin/
+
+# Linux (x86_64)
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv darp-*/darp /usr/local/bin/
+```
+
+### From source
+
+```sh
+git clone https://github.com/arcodetype/darp-rust.git
+cd darp-rust
+cargo build --release
+sudo cp ./target/release/darp /usr/local/bin/darp
+```
 
 ## Quick Start
 
 This gets you from zero to a running Go API in under five minutes.
 
-### 1. Install
-
-```sh
-cargo build --release
-sudo cp ./target/release/darp /usr/local/bin/darp
-```
-
-### 2. Set up a domain
+### 1. Set up a domain
 
 ```sh
 mkdir -p ~/projects/hello-world
@@ -26,7 +58,7 @@ darp config add domain projects ~/projects
 darp deploy
 ```
 
-### 3. Build a container image
+### 2. Build a container image
 
 Your image needs **nginx** installed so darp can reverse-proxy to it. See [dockerfiles/](./dockerfiles/) for starters.
 
@@ -40,7 +72,7 @@ EOF
 docker build -t darp-go .
 ```
 
-### 4. Shell in and create a project
+### 3. Shell in and create a project
 
 ```sh
 darp shell darp-go
@@ -61,7 +93,7 @@ go mod init hello && go mod tidy && air init
 exit
 ```
 
-### 5. Serve it
+### 4. Serve it
 
 ```sh
 darp config set env serve-command go 'air'

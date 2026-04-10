@@ -2,6 +2,15 @@
 name = "darp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Directories auto-reverse proxied — turn local project folders into .test domains with Docker/Podman"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/arcodetype/darp-rust"
+homepage = "https://github.com/arcodetype/darp-rust"
+keywords = ["docker", "development", "reverse-proxy", "local-development", "podman"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "readme.md"
+exclude = ["dockerfiles/", ".github/"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
