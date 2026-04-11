@@ -135,6 +135,8 @@ enum SetCommand {
     },
     /// Enable/disable mirroring URLs into /etc/hosts
     UrlsInHosts { value: String },
+    /// Enable/disable WSL mode (syncs Windows hosts file and adds doctor checks)
+    Wsl { value: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1595,6 +1597,64 @@ fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow::Re
     }
 
     // -----------------------------------------------------------------------
+    // 9. WSL (only shown when wsl config is enabled)
+    // -----------------------------------------------------------------------
+    if config.wsl.unwrap_or(false) {
+        let mut s = DoctorSection::new("WSL");
+
+        // Check Administrator status via powershell.exe
+        match std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[bool](([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))",
+            ])
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout == "True" {
+                    s.ok("WSL is running as Administrator");
+                } else {
+                    s.fail(
+                        "WSL is NOT running as Administrator — required to write Windows hosts file",
+                    );
+                }
+            }
+            Err(_) => {
+                s.fail("powershell.exe not found — are you running inside WSL?");
+            }
+        }
+
+        // Check Windows hosts file is accessible
+        let win_hosts = Path::new("/mnt/c/Windows/System32/drivers/etc/hosts");
+        if win_hosts.exists() {
+            match fs::OpenOptions::new().append(true).open(win_hosts) {
+                Ok(_) => {
+                    s.ok("/mnt/c/Windows/System32/drivers/etc/hosts is writable");
+                }
+                Err(_) => {
+                    s.fail("/mnt/c/Windows/System32/drivers/etc/hosts is not writable — run WSL as Administrator");
+                }
+            }
+        } else {
+            s.fail(
+                "/mnt/c/Windows/System32/drivers/etc/hosts not found — is the C: drive mounted?",
+            );
+        }
+
+        // Check urls_in_hosts is also enabled
+        if !config.urls_in_hosts.unwrap_or(false) {
+            s.warn("urls_in_hosts is not enabled — WSL hosts sync requires it. Run 'darp config set urls-in-hosts true'");
+        }
+
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
+    // -----------------------------------------------------------------------
     // Summary
     // -----------------------------------------------------------------------
     println!();
@@ -2071,6 +2131,11 @@ fn cmd_deploy(
         // We only map to 127.0.0.1 here; the container sees 0.0.0.0 above.
         let os = OsIntegration::new(paths, config, &engine.kind);
         os.sync_system_hosts(&hosts_container_lines)?;
+
+        // Also sync Windows hosts file if WSL mode is enabled
+        if config.wsl.unwrap_or(false) {
+            os.sync_windows_hosts(&hosts_container_lines)?;
+        }
     }
 
     Ok(())
@@ -2906,6 +2971,17 @@ fn cmd_set(
             let state = if v { "enabled" } else { "disabled" };
             println!(
                 "urls_in_hosts has been {} (stored in {}). Next 'darp deploy' will sync /etc/hosts accordingly.",
+                state,
+                paths.config_path.display()
+            );
+        }
+        SetCommand::Wsl { value } => {
+            let v = config.parse_bool(&value)?;
+            config.wsl = Some(v);
+            config.save(&paths.config_path)?;
+            let state = if v { "enabled" } else { "disabled" };
+            println!(
+                "WSL mode has been {} (stored in {}). When enabled alongside urls_in_hosts, 'darp deploy' will also sync /mnt/c/Windows/System32/drivers/etc/hosts.",
                 state,
                 paths.config_path.display()
             );

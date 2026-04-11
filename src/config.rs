@@ -56,6 +56,8 @@ pub struct Config {
     pub domains: Option<std::collections::BTreeMap<String, Domain>>,
     pub environments: Option<std::collections::BTreeMap<String, Environment>>,
     pub urls_in_hosts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl: Option<bool>,
 }
 
 pub fn resolve_location(location: &str) -> Result<PathBuf> {
@@ -292,10 +294,7 @@ impl Config {
         let v = s.trim().to_lowercase();
         match v.as_str() {
             "true" | "1" | "yes" | "y" | "on" => Ok(true),
-            "false" | "0" | "no" | "n" | "off" => Err(anyhow!(
-                "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
-                s
-            )),
+            "false" | "0" | "no" | "n" | "off" => Ok(false),
             _ => Err(anyhow!(
                 "Invalid boolean value: {} (expected TRUE/FALSE/yes/no/1/0)",
                 s

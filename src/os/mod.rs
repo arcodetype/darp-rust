@@ -181,6 +181,81 @@ impl<'a> OsIntegration<'a> {
         }
     }
 
+    pub fn sync_windows_hosts(&self, hosts_container_lines: &[String]) -> Result<()> {
+        let header = "# --- DARP HOSTS START ---";
+        let footer = "# --- DARP HOSTS END ---";
+        let hosts_path = "/mnt/c/Windows/System32/drivers/etc/hosts";
+
+        let mut current = fs::read_to_string(hosts_path).map_err(|e| {
+            anyhow!(
+                "Unable to read Windows hosts file at {}: {}. Ensure WSL is running as Administrator.",
+                hosts_path,
+                e
+            )
+        })?;
+        current = current.replace("\r\n", "\n");
+
+        let start = current.find(header);
+        let before: String;
+        let after: String;
+
+        if let Some(s) = start {
+            if let Some(e) = current[s..].find(footer) {
+                let end = s + e + footer.len();
+                before = current[..s].trim_end_matches('\n').to_string();
+                after = current[end..].trim_start_matches('\n').to_string();
+            } else {
+                before = current.trim_end_matches('\n').to_string();
+                after = String::new();
+            }
+        } else {
+            before = current.trim_end_matches('\n').to_string();
+            after = String::new();
+        }
+
+        // Build new block
+        let mut block = String::new();
+        block.push_str(header);
+        block.push('\n');
+        for line in hosts_container_lines {
+            let parts: Vec<_> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let host = parts[1];
+                block.push_str(&format!("127.0.0.1   {}\n", host));
+            }
+        }
+        block.push_str(footer);
+        block.push('\n');
+
+        let mut new_contents = String::new();
+        if !before.is_empty() {
+            new_contents.push_str(before.trim_end_matches('\n'));
+            new_contents.push('\n');
+        }
+        new_contents.push('\n');
+        new_contents.push_str(block.trim_end_matches('\n'));
+        new_contents.push('\n');
+        if !after.is_empty() {
+            new_contents.push('\n');
+            new_contents.push_str(after.trim_start_matches('\n'));
+            new_contents.push('\n');
+        }
+
+        fs::write(hosts_path, new_contents.as_bytes()).map_err(|e| {
+            anyhow!(
+                "Unable to write Windows hosts file at {}: {}. Ensure WSL is running as Administrator.",
+                hosts_path,
+                e
+            )
+        })?;
+
+        println!(
+            "{} updated with Darp URL mappings (127.0.0.1).",
+            hosts_path.green()
+        );
+        Ok(())
+    }
+
     pub fn uninstall(&self) -> Result<()> {
         #[cfg(unix)]
         {
