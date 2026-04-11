@@ -20,6 +20,7 @@ use crate::os::OsIntegration;
 #[command(
     name = "darp",
     about = "Your directories auto-reverse proxied.",
+    version,
     disable_help_subcommand = true
 )]
 struct Cli {
