@@ -2124,6 +2124,48 @@ fn cmd_shell(
 
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
 
+    let shell_command = service_opt
+        .and_then(|s| s.shell_command.as_deref())
+        .or_else(|| group_opt.and_then(|g| g.shell_command.as_deref()))
+        .or(domain.shell_command.as_deref())
+        .or_else(|| env.as_ref().and_then(|e| e.shell_command.as_deref()))
+        .unwrap_or("sh");
+
+    // If container is already running, exec into it
+    if engine.is_container_running(&container_name) {
+        if dry_run {
+            println!(
+                "{} exec -it {} sh -c 'cd /app; exec {}'",
+                engine.bin.unwrap_or("docker"),
+                container_name,
+                shell_command
+            );
+            return Ok(());
+        }
+
+        println!(
+            "Attaching to running container {}...",
+            current_directory_name.cyan()
+        );
+        let bin = engine.bin.expect("engine bin not set");
+        let exec_inner = format!("cd /app; exec {}", shell_command);
+        let status = std::process::Command::new(bin)
+            .arg("exec")
+            .arg("-it")
+            .arg(&container_name)
+            .arg("sh")
+            .arg("-c")
+            .arg(&exec_inner)
+            .status()?;
+
+        if let Some(code) = status.code() {
+            if code != 0 {
+                println!("exiting with status code {}", code);
+            }
+        }
+        return Ok(());
+    }
+
     let mut cmd = engine.base_run_interactive(&container_name);
 
     if engine.is_docker() {
@@ -2248,13 +2290,6 @@ fn cmd_shell(
         &base_image,
     );
 
-    let shell_command = service_opt
-        .and_then(|s| s.shell_command.as_deref())
-        .or_else(|| group_opt.and_then(|g| g.shell_command.as_deref()))
-        .or(domain.shell_command.as_deref())
-        .or_else(|| env.as_ref().and_then(|e| e.shell_command.as_deref()))
-        .unwrap_or("sh");
-
     let inner_cmd = format!(
         r#"if command -v nginx >/dev/null 2>&1; then
     echo "Starting nginx..."; nginx;
@@ -2357,6 +2392,51 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         });
 
     let container_name = format!("darp_{}_{}", domain_name, current_directory_name);
+
+    // If container is already running, check if the serve command is active
+    if engine.is_container_running(&container_name) {
+        let serve_binary = serve_command
+            .split_whitespace()
+            .next()
+            .unwrap_or(serve_command);
+        if engine.is_process_running_in_container(&container_name, serve_binary) {
+            println!("darp is already serving {}", current_directory_name.cyan());
+            return Ok(());
+        }
+
+        // Container running but serve command is not — exec serve into it
+        if dry_run {
+            println!(
+                "{} exec {} sh -c 'cd /app; {}'",
+                engine.bin.unwrap_or("docker"),
+                container_name,
+                serve_command
+            );
+            return Ok(());
+        }
+
+        println!(
+            "Starting serve in running container {}...",
+            current_directory_name.cyan()
+        );
+        let bin = engine.bin.expect("engine bin not set");
+        let exec_inner = format!("cd /app; {}", serve_command);
+        let status = std::process::Command::new(bin)
+            .arg("exec")
+            .arg(&container_name)
+            .arg("sh")
+            .arg("-c")
+            .arg(&exec_inner)
+            .status()?;
+
+        if let Some(code) = status.code() {
+            if code != 0 {
+                println!("exiting with status code {}", code);
+            }
+        }
+        return Ok(());
+    }
+
     let mut cmd = engine.base_run_noninteractive(&container_name);
 
     if engine.is_docker() {

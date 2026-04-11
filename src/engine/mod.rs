@@ -192,6 +192,18 @@ impl Engine {
         false
     }
 
+    pub fn is_process_running_in_container(&self, container_name: &str, process: &str) -> bool {
+        let Some(bin) = self.bin else { return false };
+        let output = Command::new(bin).arg("top").arg(container_name).output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                return text.lines().skip(1).any(|line| line.contains(process));
+            }
+        }
+        false
+    }
+
     pub fn is_engine_installed(&self) -> bool {
         let Some(bin) = self.bin else { return false };
         Command::new("which")
