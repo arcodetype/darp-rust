@@ -54,7 +54,7 @@ mkdir -p ~/projects/hello-world
 
 darp config set engine docker
 darp install
-darp config add domain projects ~/projects
+darp config set dom serve-command -l ~/projects projects 'air'
 darp deploy
 ```
 

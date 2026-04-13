@@ -131,9 +131,9 @@ darp config set env image-repository go 'registry.example.com/go'
 darp config set env default-container-image go '1.25'
 darp config set env platform go 'linux/amd64'
 
-# Domain level
+# Domain level (use -l to create the domain if it doesn't exist)
 darp config set dom default-environment my-domain go
-darp config set dom serve-command my-domain 'npm start'
+darp config set dom serve-command -l ~/projects my-domain 'npm start'
 darp config set dom image-repository my-domain 'registry.example.com/node'
 # Also: shell-command, platform, default-container-image
 
@@ -156,15 +156,13 @@ Add entries to collections or create new items.
 # Pre-config
 darp config add pre-config '{home}/team/config.json' -r '{home}/team-repo'
 
-# Domain
-darp config add domain my-projects ~/projects
-
 # Group (create an empty group)
 darp config add grp group my-domain laravel
 
-# Port mappings
+# Port mappings (use -l to create the domain if it doesn't exist)
 darp config add env portmap go 2345 2345
 darp config add dom portmap my-domain 8080 8080
+darp config add dom portmap -l ~/projects my-domain 8080 8080
 darp config add grp portmap my-domain laravel 9000 9000
 darp config add svc portmap my-domain my-service 3000 3000
 darp config add svc portmap -g laravel my-domain admin 8082 8082
@@ -190,7 +188,10 @@ darp config rm pre-config '{home}/team/config.json'
 darp config rm domain my-projects
 
 # Group
-darp config rm grp group my-domain laravel
+darp config rm group my-domain laravel
+
+# Service
+darp config rm service my-domain laravel admin
 
 # Scalar settings
 darp config rm env serve-command go

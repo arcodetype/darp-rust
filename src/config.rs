@@ -376,6 +376,24 @@ impl Config {
         Ok(())
     }
 
+    pub fn ensure_domain_exists(
+        &mut self,
+        domain_name: &str,
+        location: Option<&str>,
+    ) -> Result<()> {
+        let domains = self.domains.get_or_insert_with(BTreeMap::new);
+        if domains.contains_key(domain_name) {
+            return Ok(());
+        }
+        match location {
+            Some(loc) => self.add_domain(domain_name, loc),
+            None => Err(anyhow!(
+                "domain '{}' does not exist. Use -l <path> to create it.",
+                domain_name
+            )),
+        }
+    }
+
     pub fn rm_domain(&mut self, name: &str) -> Result<()> {
         let domains = self
             .domains
@@ -872,6 +890,54 @@ impl Config {
         } else {
             Err(anyhow!(
                 "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            ))
+        }
+    }
+
+    pub fn rm_service(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name).ok_or_else(|| {
+            anyhow!(
+                "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+        let services = group.services.as_mut().ok_or_else(|| {
+            anyhow!(
+                "No services configured for group '{}' in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+
+        if services.remove(service_name).is_some() {
+            println!(
+                "Removed service '{}' from group '{}' in domain '{}'",
+                service_name, group_name, domain_name
+            );
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "service, {}, does not exist in group '{}' of domain {}",
+                service_name,
                 group_name,
                 domain_name
             ))

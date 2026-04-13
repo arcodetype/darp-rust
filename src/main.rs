@@ -147,31 +147,49 @@ enum SetDomCommand {
         domain_name: String,
         /// Environment name to use by default for this domain
         default_environment: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set image_repository on a domain
     ImageRepository {
         domain_name: String,
         image_repository: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set serve_command on a domain
     ServeCommand {
         domain_name: String,
         serve_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set shell_command on a domain (used by `darp shell`)
     ShellCommand {
         domain_name: String,
         shell_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set platform architecture (e.g., linux/amd64) on a domain
     Platform {
         domain_name: String,
         platform: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set default_container_image on a domain (used when no image is passed on the CLI)
     DefaultContainerImage {
         domain_name: String,
         default_container_image: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -293,13 +311,6 @@ enum AddCommand {
         #[arg(short, long)]
         repo_location: Option<String>,
     },
-    /// Add a domain
-    Domain {
-        /// Logical domain name (e.g. 'my-project')
-        name: String,
-        /// Location of the domain folder (supports {home} token)
-        location: String,
-    },
     /// Add domain-scoped configuration (volumes, port mappings, variables)
     Dom {
         #[command(subcommand)]
@@ -330,18 +341,27 @@ enum AddDomCommand {
         domain_name: String,
         host_port: String,
         container_port: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add variable to a domain
     Variable {
         domain_name: String,
         name: String,
         value: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add volume to a domain
     Volume {
         domain_name: String,
         container_dir: String,
         host_dir: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -429,6 +449,17 @@ enum AddSvcCommand {
 enum RmCommand {
     /// Remove a domain
     Domain { name: String },
+    /// Remove a group from a domain
+    Group {
+        domain_name: String,
+        group_name: String,
+    },
+    /// Remove a service from a group
+    Service {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+    },
     /// Remove a pre_config entry by its location
     PreConfig {
         /// Path to the config file to remove
@@ -492,11 +523,6 @@ enum RmDomCommand {
 
 #[derive(Subcommand, Debug)]
 enum RmGrpCommand {
-    /// Remove a group from a domain
-    Group {
-        domain_name: String,
-        group_name: String,
-    },
     /// Remove default_environment from a group
     DefaultEnvironment {
         domain_name: String,
@@ -2817,7 +2843,9 @@ fn cmd_set(
             SetDomCommand::DefaultEnvironment {
                 domain_name,
                 default_environment,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_domain_default_environment(&domain_name, &default_environment)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2828,7 +2856,9 @@ fn cmd_set(
             SetDomCommand::ImageRepository {
                 domain_name,
                 image_repository,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_domain_image_repository(&domain_name, &image_repository)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2839,7 +2869,9 @@ fn cmd_set(
             SetDomCommand::ServeCommand {
                 domain_name,
                 serve_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_domain_serve_command(&domain_name, &serve_command)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2850,7 +2882,9 @@ fn cmd_set(
             SetDomCommand::ShellCommand {
                 domain_name,
                 shell_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_domain_shell_command(&domain_name, &shell_command)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2861,7 +2895,9 @@ fn cmd_set(
             SetDomCommand::Platform {
                 domain_name,
                 platform,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_domain_platform(&domain_name, &platform)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2872,7 +2908,9 @@ fn cmd_set(
             SetDomCommand::DefaultContainerImage {
                 domain_name,
                 default_container_image,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config
                     .set_domain_default_container_image(&domain_name, &default_container_image)?;
                 config.save(&paths.config_path)?;
@@ -3001,16 +3039,14 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
             config.save(&paths.config_path)?;
             println!("Added pre_config '{}'", location);
         }
-        AddCommand::Domain { name, location } => {
-            config.add_domain(&name, &location)?;
-            config.save(&paths.config_path)?;
-        }
         AddCommand::Dom { cmd } => match cmd {
             AddDomCommand::Portmap {
                 domain_name,
                 host_port,
                 container_port,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_domain_portmap(&domain_name, &host_port, &container_port)?;
                 config.save(&paths.config_path)?;
             }
@@ -3018,7 +3054,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 domain_name,
                 name,
                 value,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_domain_variable(&domain_name, &name, &value)?;
                 config.save(&paths.config_path)?;
             }
@@ -3026,7 +3064,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 domain_name,
                 container_dir,
                 host_dir,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_domain_volume(&domain_name, &container_dir, &host_dir)?;
                 config.save(&paths.config_path)?;
             }
@@ -3158,6 +3198,21 @@ fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Res
             config.rm_domain(&name)?;
             config.save(&paths.config_path)?;
         }
+        RmCommand::Group {
+            domain_name,
+            group_name,
+        } => {
+            config.rm_group(&domain_name, &group_name)?;
+            config.save(&paths.config_path)?;
+        }
+        RmCommand::Service {
+            domain_name,
+            group_name,
+            service_name,
+        } => {
+            config.rm_service(&domain_name, &group_name, &service_name)?;
+            config.save(&paths.config_path)?;
+        }
         RmCommand::Dom { cmd } => match cmd {
             RmDomCommand::DefaultEnvironment { domain_name } => {
                 config.rm_domain_default_environment(&domain_name)?;
@@ -3205,13 +3260,6 @@ fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Res
             }
         },
         RmCommand::Grp { cmd } => match cmd {
-            RmGrpCommand::Group {
-                domain_name,
-                group_name,
-            } => {
-                config.rm_group(&domain_name, &group_name)?;
-                config.save(&paths.config_path)?;
-            }
             RmGrpCommand::DefaultEnvironment {
                 domain_name,
                 group_name,
