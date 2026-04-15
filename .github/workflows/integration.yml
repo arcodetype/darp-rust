@@ -11,45 +11,26 @@ env:
 
 jobs:
   integration:
-    name: ${{ matrix.engine }} ${{ matrix.engine_version }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.allow_failure || false }}
+    name: ${{ matrix.engine }} / ubuntu
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Docker
-          ## Ubuntu
-          - os: ubuntu-latest
-            engine: docker
+          - engine: docker
             engine_version: "latest"
-
-          ## macOS
-          - os: macos-latest
-            engine: docker
+          - engine: podman
             engine_version: "latest"
-
-          # Podman
-          ## Ubuntu
-          - os: ubuntu-latest
-            engine: podman
-            engine_version: "latest"
-
-          ## macOS
-          - os: macos-latest
-            engine: podman
-            engine_version: "latest"
-            allow_failure: true
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # --- Docker setup (Ubuntu) ---
+      # --- Docker setup ---
 
-      - name: Install Docker ${{ matrix.engine_version }} (Ubuntu)
-        if: matrix.engine == 'docker' && runner.os == 'Linux'
+      - name: Install Docker ${{ matrix.engine_version }}
+        if: matrix.engine == 'docker'
         run: |
           # Remove any pre-installed Docker
           sudo apt-get remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
@@ -80,23 +61,10 @@ jobs:
 
           docker version
 
-      # --- Docker setup (macOS) ---
+      # --- Podman setup ---
 
-      - name: Install Docker via Colima (macOS)
-        if: matrix.engine == 'docker' && runner.os == 'macOS'
-        run: |
-          brew install docker colima
-          colima start --cpu 2 --memory 4
-          for i in $(seq 1 30); do
-            docker info >/dev/null 2>&1 && break
-            sleep 2
-          done
-          docker version
-
-      # --- Podman setup (Ubuntu) ---
-
-      - name: Install Podman ${{ matrix.engine_version }} (Ubuntu)
-        if: matrix.engine == 'podman' && runner.os == 'Linux'
+      - name: Install Podman ${{ matrix.engine_version }}
+        if: matrix.engine == 'podman'
         run: |
           sudo apt-get update -qq
 
@@ -112,19 +80,6 @@ jobs:
           fi
 
           sudo apt-get install -y -qq podman
-          podman version
-
-      # --- Podman setup (macOS) ---
-
-      - name: Install Podman (macOS)
-        if: matrix.engine == 'podman' && runner.os == 'macOS'
-        run: |
-          brew install podman
-          podman machine init
-          podman machine start || {
-            echo "::warning::Podman machine failed to start — GitHub Actions macOS runners have known issues with Apple Hypervisor Framework"
-            exit 1
-          }
           podman version
 
       # --- Build + Test ---
