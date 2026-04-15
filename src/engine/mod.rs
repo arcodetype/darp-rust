@@ -80,43 +80,64 @@ impl Engine {
                     }
                 }),
             EngineKind::Podman => {
-                let output = Command::new("podman")
-                    .arg("machine")
-                    .arg("list")
-                    .arg("--format")
-                    .arg("{{.Name}} {{.Running}}")
-                    .output()?;
+                if cfg!(target_os = "linux") {
+                    // On Linux, Podman runs natively without a VM/machine.
+                    Command::new("podman")
+                        .arg("info")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .map_err(|e| anyhow!("failed to run podman info: {}", e))
+                        .and_then(|s| {
+                            if s.success() {
+                                Ok(())
+                            } else {
+                                Err(anyhow!(
+                                    "Podman does not appear to be running ({})",
+                                    "podman info".red()
+                                ))
+                            }
+                        })
+                } else {
+                    // On macOS/Windows, Podman requires a running machine/VM.
+                    let output = Command::new("podman")
+                        .arg("machine")
+                        .arg("list")
+                        .arg("--format")
+                        .arg("{{.Name}} {{.Running}}")
+                        .output()?;
 
-                if !output.status.success() {
-                    return Err(anyhow!(
-                        "Failed to run 'podman machine list': exit {}",
-                        output.status
-                    ));
-                }
-
-                let text = String::from_utf8_lossy(&output.stdout);
-                let machine_env = self
-                    .podman_machine
-                    .as_deref()
-                    .unwrap_or("podman-machine-default");
-
-                for line in text.lines() {
-                    let parts: Vec<_> = line.split_whitespace().collect();
-                    if parts.len() != 2 {
-                        continue;
+                    if !output.status.success() {
+                        return Err(anyhow!(
+                            "Failed to run 'podman machine list': exit {}",
+                            output.status
+                        ));
                     }
-                    let name = parts[0].trim_end_matches('*');
-                    let running = parts[1];
-                    if name == machine_env && running.eq_ignore_ascii_case("true") {
-                        return Ok(());
-                    }
-                }
 
-                Err(anyhow!(
-                    "Podman machine '{}' appears to be down ({})",
-                    machine_env,
-                    format!("podman machine start {}", machine_env).red()
-                ))
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    let machine_env = self
+                        .podman_machine
+                        .as_deref()
+                        .unwrap_or("podman-machine-default");
+
+                    for line in text.lines() {
+                        let parts: Vec<_> = line.split_whitespace().collect();
+                        if parts.len() != 2 {
+                            continue;
+                        }
+                        let name = parts[0].trim_end_matches('*');
+                        let running = parts[1];
+                        if name == machine_env && running.eq_ignore_ascii_case("true") {
+                            return Ok(());
+                        }
+                    }
+
+                    Err(anyhow!(
+                        "Podman machine '{}' appears to be down ({})",
+                        machine_env,
+                        format!("podman machine start {}", machine_env).red()
+                    ))
+                }
             }
             EngineKind::None => Err(anyhow!(
                 "No container engine is configured.\nUse 'darp set engine podman' or 'darp set engine docker'."

@@ -13,6 +13,7 @@ jobs:
   integration:
     name: ${{ matrix.engine }} ${{ matrix.engine_version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +39,7 @@ jobs:
           - os: macos-latest
             engine: podman
             engine_version: "latest"
+            allow_failure: true
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +65,11 @@ jobs:
 
           # Find the latest patch for the requested major version
           VERSION_PREFIX="${{ matrix.engine_version }}"
-          PACKAGE=$(apt-cache madison docker-ce | awk -F'|' '{print $2}' | tr -d ' ' | grep "^5:${VERSION_PREFIX}\." | head -1)
+          if [ "$VERSION_PREFIX" = "latest" ]; then
+            PACKAGE=$(apt-cache madison docker-ce | awk -F'|' '{print $2}' | tr -d ' ' | head -1)
+          else
+            PACKAGE=$(apt-cache madison docker-ce | awk -F'|' '{print $2}' | tr -d ' ' | grep "^5:${VERSION_PREFIX}\." | head -1)
+          fi
           if [ -z "$PACKAGE" ]; then
             echo "No Docker CE package found for version prefix ${VERSION_PREFIX}"
             apt-cache madison docker-ce | head -20
@@ -76,15 +82,14 @@ jobs:
 
       # --- Docker setup (macOS) ---
 
-      - name: Install Docker (macOS)
+      - name: Install Docker via Colima (macOS)
         if: matrix.engine == 'docker' && runner.os == 'macOS'
         run: |
-          brew install --cask docker
-          open -a Docker
-          echo "Waiting for Docker Desktop to start..."
-          for i in $(seq 1 60); do
+          brew install docker colima
+          colima start --cpu 2 --memory 4
+          for i in $(seq 1 30); do
             docker info >/dev/null 2>&1 && break
-            sleep 3
+            sleep 2
           done
           docker version
 
@@ -116,7 +121,10 @@ jobs:
         run: |
           brew install podman
           podman machine init
-          podman machine start
+          podman machine start || {
+            echo "::warning::Podman machine failed to start — GitHub Actions macOS runners have known issues with Apple Hypervisor Framework"
+            exit 1
+          }
           podman version
 
       # --- Build + Test ---
