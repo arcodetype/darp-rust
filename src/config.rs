@@ -71,7 +71,7 @@ pub fn resolve_location(location: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(resolved))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Domain {
     pub location: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

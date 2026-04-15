@@ -8,12 +8,12 @@ use std::process::{Command, Stdio};
 
 const NGINX_CONF: &str = include_str!("../../assets/nginx.conf");
 
-const HOSTS_HEADER: &str = "# --- DARP HOSTS START ---";
-const HOSTS_FOOTER: &str = "# --- DARP HOSTS END ---";
+pub const HOSTS_HEADER: &str = "# --- DARP HOSTS START ---";
+pub const HOSTS_FOOTER: &str = "# --- DARP HOSTS END ---";
 
 /// Parse an existing hosts file, replace the DARP block with new entries,
 /// and return the full new file content.
-fn build_hosts_content(current_raw: &str, hosts_container_lines: &[String]) -> String {
+pub fn build_hosts_content(current_raw: &str, hosts_container_lines: &[String]) -> String {
     let current = current_raw.replace("\r\n", "\n");
 
     let (before, after) = if let Some(s) = current.find(HOSTS_HEADER) {

@@ -1,16 +1,10 @@
-mod cli;
-mod commands;
-mod config;
-mod engine;
-mod os;
-
 use clap::{CommandFactory, Parser};
 
-use crate::cli::*;
-use crate::commands::*;
-use crate::config::{Config, DarpPaths};
-use crate::engine::{Engine, EngineKind};
-use crate::os::OsIntegration;
+use darp::cli::*;
+use darp::commands::*;
+use darp::config::{Config, DarpPaths};
+use darp::engine::{Engine, EngineKind};
+use darp::os::OsIntegration;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();

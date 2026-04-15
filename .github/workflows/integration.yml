@@ -1,0 +1,130 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    name: ${{ matrix.engine }} ${{ matrix.engine_version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Docker
+          ## Ubuntu
+          - os: ubuntu-latest
+            engine: docker
+            engine_version: "latest"
+
+          ## macOS
+          - os: macos-latest
+            engine: docker
+            engine_version: "latest"
+
+          # Podman
+          ## Ubuntu
+          - os: ubuntu-latest
+            engine: podman
+            engine_version: "latest"
+
+          ## macOS
+          - os: macos-latest
+            engine: podman
+            engine_version: "latest"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # --- Docker setup (Ubuntu) ---
+
+      - name: Install Docker ${{ matrix.engine_version }} (Ubuntu)
+        if: matrix.engine == 'docker' && runner.os == 'Linux'
+        run: |
+          # Remove any pre-installed Docker
+          sudo apt-get remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
+
+          # Add Docker's official GPG key and repo
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          sudo apt-get update -qq
+
+          # Find the latest patch for the requested major version
+          VERSION_PREFIX="${{ matrix.engine_version }}"
+          PACKAGE=$(apt-cache madison docker-ce | awk -F'|' '{print $2}' | tr -d ' ' | grep "^5:${VERSION_PREFIX}\." | head -1)
+          if [ -z "$PACKAGE" ]; then
+            echo "No Docker CE package found for version prefix ${VERSION_PREFIX}"
+            apt-cache madison docker-ce | head -20
+            exit 1
+          fi
+          echo "Installing docker-ce=${PACKAGE}"
+          sudo apt-get install -y docker-ce="${PACKAGE}" docker-ce-cli="${PACKAGE}" containerd.io
+
+          docker version
+
+      # --- Docker setup (macOS) ---
+
+      - name: Install Docker (macOS)
+        if: matrix.engine == 'docker' && runner.os == 'macOS'
+        run: |
+          brew install --cask docker
+          open -a Docker
+          echo "Waiting for Docker Desktop to start..."
+          for i in $(seq 1 60); do
+            docker info >/dev/null 2>&1 && break
+            sleep 3
+          done
+          docker version
+
+      # --- Podman setup (Ubuntu) ---
+
+      - name: Install Podman ${{ matrix.engine_version }} (Ubuntu)
+        if: matrix.engine == 'podman' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+
+          if [ "${{ matrix.engine_version }}" = "5" ]; then
+            # Podman 5 may need an external repo on older Ubuntu
+            sudo mkdir -p /etc/apt/keyrings
+            curl -fsSL "https://download.opensuse.org/repositories/devel:kubic:libcontainers:unstable/xUbuntu_$(lsb_release -rs)/Release.key" \
+              | gpg --dearmor \
+              | sudo tee /etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg > /dev/null
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] https://download.opensuse.org/repositories/devel:kubic:libcontainers:unstable/xUbuntu_$(lsb_release -rs)/ /" \
+              | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list > /dev/null
+            sudo apt-get update -qq
+          fi
+
+          sudo apt-get install -y -qq podman
+          podman version
+
+      # --- Podman setup (macOS) ---
+
+      - name: Install Podman (macOS)
+        if: matrix.engine == 'podman' && runner.os == 'macOS'
+        run: |
+          brew install podman
+          podman machine init
+          podman machine start
+          podman version
+
+      # --- Build + Test ---
+
+      - name: Build darp
+        run: cargo build --locked
+
+      - name: Run integration tests
+        run: cargo test --test cli_smoke_test -- --ignored --test-threads=1
+        env:
+          DARP_TEST_ENGINE: ${{ matrix.engine }}
