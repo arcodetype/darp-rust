@@ -405,13 +405,30 @@ impl Config {
         if domains.contains_key(domain_name) {
             return Ok(());
         }
-        match location {
-            Some(loc) => self.add_domain(domain_name, loc),
-            None => Err(anyhow!(
-                "domain '{}' does not exist. Use -l <path> to create it.",
-                domain_name
-            )),
+        // Explicit -l takes priority
+        if let Some(loc) = location {
+            return self.add_domain(domain_name, loc);
         }
+        // Check pre_configs for the domain
+        if let Some(pre_configs) = &self.pre_config {
+            for pc in pre_configs {
+                let resolved = resolve_location(&pc.location)?;
+                if !resolved.exists() {
+                    continue;
+                }
+                let data = fs::read(&resolved)?;
+                let parent: Config = serde_json::from_slice(&data).unwrap_or_default();
+                if let Some(parent_domains) = &parent.domains {
+                    if let Some(dom) = parent_domains.get(domain_name) {
+                        return self.add_domain(domain_name, &dom.location);
+                    }
+                }
+            }
+        }
+        Err(anyhow!(
+            "domain '{}' does not exist. Use -l <path> to create it.",
+            domain_name
+        ))
     }
 
     pub fn rm_domain(&mut self, name: &str) -> Result<()> {
@@ -863,30 +880,6 @@ impl Config {
 
     // --- Group-level CRUD ---
 
-    pub fn add_group(&mut self, domain_name: &str, group_name: &str) -> Result<()> {
-        let domains = self
-            .domains
-            .as_mut()
-            .ok_or_else(|| anyhow!("No domains configured"))?;
-        let domain = domains
-            .get_mut(domain_name)
-            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-
-        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-
-        if groups.contains_key(group_name) {
-            return Err(anyhow!(
-                "Group '{}' already exists in domain '{}'.",
-                group_name,
-                domain_name
-            ));
-        }
-
-        groups.insert(group_name.to_string(), Group::default());
-        println!("Created group '{}' in domain '{}'", group_name, domain_name);
-        Ok(())
-    }
-
     pub fn rm_group(&mut self, domain_name: &str, group_name: &str) -> Result<()> {
         let domains = self
             .domains
@@ -979,17 +972,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.default_environment = Some(env_name.to_string());
         Ok(())
@@ -1046,17 +1030,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.serve_command = Some(cmd.to_string());
         Ok(())
@@ -1109,17 +1084,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.shell_command = Some(cmd.to_string());
         Ok(())
@@ -1172,17 +1138,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.image_repository = Some(repo.to_string());
         Ok(())
@@ -1235,17 +1192,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.platform = Some(platform.to_string());
         Ok(())
@@ -1298,17 +1246,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         group.default_container_image = Some(image.to_string());
         Ok(())
@@ -1366,17 +1305,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         let maps = group.host_portmappings.get_or_insert_with(BTreeMap::new);
 
@@ -1462,17 +1392,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         let maps = group.variables.get_or_insert_with(BTreeMap::new);
 
@@ -1558,17 +1479,8 @@ impl Config {
         let domain = domains
             .get_mut(domain_name)
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
-        let groups = domain
-            .groups
-            .as_mut()
-            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
 
         let vols = group.volumes.get_or_insert_with(Vec::new);
 
@@ -1825,13 +1737,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let service = services
             .entry(service_name.to_string())
@@ -1994,13 +1900,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let service = services
             .entry(service_name.to_string())
@@ -2234,13 +2134,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2359,13 +2253,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2441,13 +2329,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2523,13 +2405,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2605,13 +2481,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2687,13 +2557,7 @@ impl Config {
             .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
 
         let groups = domain.groups.get_or_insert_with(BTreeMap::new);
-        let group = groups.get_mut(group_name).ok_or_else(|| {
-            anyhow!(
-                "group, {}, does not exist in domain {}",
-                group_name,
-                domain_name
-            )
-        })?;
+        let group = groups.entry(group_name.to_string()).or_default();
         let services = group.services.get_or_insert_with(BTreeMap::new);
         let svc = services
             .entry(service_name.to_string())
@@ -2957,5 +2821,555 @@ impl Config {
 
         let cfg: Config = serde_json::from_value(merged)?;
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a Config with a single domain.
+    fn config_with_domain(domain_name: &str, location: &str) -> Config {
+        let mut config = Config::default();
+        config.add_domain(domain_name, location).unwrap();
+        config
+    }
+
+    // ---------------------------------------------------------------
+    // Group auto-creation on set
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn set_group_serve_command_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_group_serve_command("d", "new-grp", "npm start")
+            .unwrap();
+
+        let group = config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["new-grp"]
+            .clone();
+        assert_eq!(group.serve_command.unwrap(), "npm start");
+    }
+
+    #[test]
+    fn set_group_shell_command_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.set_group_shell_command("d", "g", "bash").unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.shell_command.as_deref(), Some("bash"));
+    }
+
+    #[test]
+    fn set_group_image_repository_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_group_image_repository("d", "g", "myrepo")
+            .unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.image_repository.as_deref(), Some("myrepo"));
+    }
+
+    #[test]
+    fn set_group_platform_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.set_group_platform("d", "g", "linux/amd64").unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.platform.as_deref(), Some("linux/amd64"));
+    }
+
+    #[test]
+    fn set_group_default_environment_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_group_default_environment("d", "g", "dev")
+            .unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.default_environment.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn set_group_default_container_image_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_group_default_container_image("d", "g", "ubuntu:latest")
+            .unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(
+            group.default_container_image.as_deref(),
+            Some("ubuntu:latest")
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Group auto-creation on add
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn add_group_portmap_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.add_group_portmap("d", "g", "8080", "80").unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.host_portmappings.as_ref().unwrap()["8080"], "80");
+    }
+
+    #[test]
+    fn add_group_variable_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.add_group_variable("d", "g", "FOO", "bar").unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.variables.as_ref().unwrap()["FOO"], "bar");
+    }
+
+    #[test]
+    fn add_group_volume_creates_group() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .add_group_volume("d", "g", "/app", "/host/app")
+            .unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        let vols = group.volumes.as_ref().unwrap();
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].container, "/app");
+        assert_eq!(vols[0].host, "/host/app");
+    }
+
+    // ---------------------------------------------------------------
+    // Service add/set auto-creates group
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn set_service_serve_command_creates_group_and_service() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_service_serve_command("d", "g", "svc", "npm run dev")
+            .unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.serve_command.as_deref(), Some("npm run dev"));
+    }
+
+    #[test]
+    fn add_service_portmap_creates_group_and_service() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.add_portmap("d", "g", "svc", "3000", "3000").unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.host_portmappings.as_ref().unwrap()["3000"], "3000");
+    }
+
+    #[test]
+    fn add_service_variable_creates_group_and_service() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.add_variable("d", "g", "svc", "KEY", "val").unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.variables.as_ref().unwrap()["KEY"], "val");
+    }
+
+    #[test]
+    fn add_service_volume_creates_group_and_service() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .add_service_volume("d", "g", "svc", "/app", "/host")
+            .unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        let vols = svc.volumes.as_ref().unwrap();
+        assert_eq!(vols.len(), 1);
+    }
+
+    // ---------------------------------------------------------------
+    // Existing group/service is preserved (not overwritten)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn set_on_existing_group_preserves_other_fields() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config.set_group_serve_command("d", "g", "cmd1").unwrap();
+        config.set_group_shell_command("d", "g", "cmd2").unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.serve_command.as_deref(), Some("cmd1"));
+        assert_eq!(group.shell_command.as_deref(), Some("cmd2"));
+    }
+
+    #[test]
+    fn add_to_existing_service_preserves_other_fields() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        config
+            .set_service_serve_command("d", "g", "svc", "cmd")
+            .unwrap();
+        config.add_portmap("d", "g", "svc", "8080", "80").unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.serve_command.as_deref(), Some("cmd"));
+        assert_eq!(svc.host_portmappings.as_ref().unwrap()["8080"], "80");
+    }
+
+    // ---------------------------------------------------------------
+    // Domain auto-creation via ensure_domain_exists
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn ensure_domain_exists_creates_domain_with_location() {
+        let mut config = Config::default();
+        config
+            .ensure_domain_exists("newdom", Some("/tmp/newdom"))
+            .unwrap();
+
+        let dom = &config.domains.as_ref().unwrap()["newdom"];
+        assert_eq!(dom.location, "/tmp/newdom");
+    }
+
+    #[test]
+    fn ensure_domain_exists_errors_without_location() {
+        let mut config = Config::default();
+        let err = config.ensure_domain_exists("nope", None).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+        assert!(err.to_string().contains("-l"));
+    }
+
+    #[test]
+    fn ensure_domain_exists_noop_when_exists() {
+        let mut config = config_with_domain("d", "/tmp/d");
+        // Should not error even without location since domain already exists
+        config.ensure_domain_exists("d", None).unwrap();
+        assert_eq!(config.domains.as_ref().unwrap()["d"].location, "/tmp/d");
+    }
+
+    #[test]
+    fn ensure_domain_exists_finds_domain_in_pre_config() {
+        // Write a parent config with a domain
+        let dir = std::env::temp_dir().join("darp_test_pre_config");
+        let _ = fs::create_dir_all(&dir);
+        let parent_path = dir.join("parent_config.json");
+        let parent_json = serde_json::json!({
+            "domains": {
+                "parent-dom": {
+                    "location": "/projects/parent-dom"
+                }
+            }
+        });
+        fs::write(
+            &parent_path,
+            serde_json::to_vec_pretty(&parent_json).unwrap(),
+        )
+        .unwrap();
+
+        // Create a leaf config with a pre_config pointing to the parent
+        let mut config = Config::default();
+        config.pre_config = Some(vec![PreConfig {
+            location: parent_path.to_string_lossy().into_owned(),
+            repo_location: None,
+        }]);
+
+        // Should find the domain from the pre_config without -l
+        config.ensure_domain_exists("parent-dom", None).unwrap();
+
+        let dom = &config.domains.as_ref().unwrap()["parent-dom"];
+        assert_eq!(dom.location, "/projects/parent-dom");
+
+        // Cleanup
+        let _ = fs::remove_file(&parent_path);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn ensure_domain_exists_pre_config_domain_allows_group_operations() {
+        // Write a parent config with a domain
+        let dir = std::env::temp_dir().join("darp_test_pre_config_grp");
+        let _ = fs::create_dir_all(&dir);
+        let parent_path = dir.join("parent_config.json");
+        let parent_json = serde_json::json!({
+            "domains": {
+                "parent-dom": {
+                    "location": "/projects/parent-dom"
+                }
+            }
+        });
+        fs::write(
+            &parent_path,
+            serde_json::to_vec_pretty(&parent_json).unwrap(),
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.pre_config = Some(vec![PreConfig {
+            location: parent_path.to_string_lossy().into_owned(),
+            repo_location: None,
+        }]);
+
+        // Domain comes from pre_config, group and service auto-created
+        config.ensure_domain_exists("parent-dom", None).unwrap();
+        config
+            .set_group_serve_command("parent-dom", "g", "npm start")
+            .unwrap();
+
+        let group = &config.domains.as_ref().unwrap()["parent-dom"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.serve_command.as_deref(), Some("npm start"));
+
+        // Cleanup
+        let _ = fs::remove_file(&parent_path);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // Group set/add auto-creates domain (with -l) + group
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn set_group_creates_domain_and_group() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config.set_group_serve_command("d", "g", "cmd").unwrap();
+
+        let dom = &config.domains.as_ref().unwrap()["d"];
+        assert_eq!(dom.location, "/tmp/d");
+        let group = &dom.groups.as_ref().unwrap()["g"];
+        assert_eq!(group.serve_command.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn add_group_portmap_creates_domain_and_group() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config.add_group_portmap("d", "g", "8080", "80").unwrap();
+
+        assert_eq!(config.domains.as_ref().unwrap()["d"].location, "/tmp/d");
+        let group = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"];
+        assert_eq!(group.host_portmappings.as_ref().unwrap()["8080"], "80");
+    }
+
+    #[test]
+    fn set_group_on_missing_domain_errors_without_location() {
+        let mut config = Config::default();
+        let err = config
+            .set_group_serve_command("nope", "g", "cmd")
+            .unwrap_err();
+        assert!(err.to_string().contains("No domains configured"));
+    }
+
+    // ---------------------------------------------------------------
+    // Service set/add auto-creates domain (with -l) + group + service
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn set_service_creates_domain_group_and_service() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config
+            .set_service_serve_command("d", "g", "svc", "npm run dev")
+            .unwrap();
+
+        let dom = &config.domains.as_ref().unwrap()["d"];
+        assert_eq!(dom.location, "/tmp/d");
+        let svc = &dom.groups.as_ref().unwrap()["g"].services.as_ref().unwrap()["svc"];
+        assert_eq!(svc.serve_command.as_deref(), Some("npm run dev"));
+    }
+
+    #[test]
+    fn add_service_portmap_creates_domain_group_and_service() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config.add_portmap("d", "g", "svc", "3000", "3000").unwrap();
+
+        assert_eq!(config.domains.as_ref().unwrap()["d"].location, "/tmp/d");
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.host_portmappings.as_ref().unwrap()["3000"], "3000");
+    }
+
+    #[test]
+    fn add_service_variable_creates_domain_group_and_service() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config.add_variable("d", "g", "svc", "KEY", "val").unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.variables.as_ref().unwrap()["KEY"], "val");
+    }
+
+    #[test]
+    fn add_service_volume_creates_domain_group_and_service() {
+        let mut config = Config::default();
+        config.ensure_domain_exists("d", Some("/tmp/d")).unwrap();
+        config
+            .add_service_volume("d", "g", "svc", "/app", "/host")
+            .unwrap();
+
+        let svc = &config.domains.as_ref().unwrap()["d"]
+            .groups
+            .as_ref()
+            .unwrap()["g"]
+            .services
+            .as_ref()
+            .unwrap()["svc"];
+        assert_eq!(svc.volumes.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_service_on_missing_domain_errors_without_location() {
+        let mut config = Config::default();
+        let err = config
+            .set_service_serve_command("nope", "g", "svc", "cmd")
+            .unwrap_err();
+        assert!(err.to_string().contains("No domains configured"));
+    }
+
+    // ---------------------------------------------------------------
+    // Null-safe serialization
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn serialized_config_has_no_null_values() {
+        let config = config_with_domain("d", "/tmp/d");
+        let value = serde_json::to_value(&config).unwrap();
+        fn assert_no_nulls(val: &serde_json::Value, path: &str) {
+            match val {
+                serde_json::Value::Null => panic!("Found null at {}", path),
+                serde_json::Value::Object(map) => {
+                    for (k, v) in map {
+                        assert_no_nulls(v, &format!("{}.{}", path, k));
+                    }
+                }
+                serde_json::Value::Array(arr) => {
+                    for (i, v) in arr.iter().enumerate() {
+                        assert_no_nulls(v, &format!("{}[{}]", path, i));
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_no_nulls(&value, "root");
+    }
+
+    #[test]
+    fn strip_nulls_removes_nested_nulls() {
+        let mut val: serde_json::Value = serde_json::json!({
+            "a": null,
+            "b": "keep",
+            "c": { "d": null, "e": "also_keep" }
+        });
+        strip_nulls(&mut val);
+        assert_eq!(
+            val,
+            serde_json::json!({
+                "b": "keep",
+                "c": { "e": "also_keep" }
+            })
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // merge_values: null handling
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn merge_values_null_does_not_override_base() {
+        let base = serde_json::json!({ "engine": "docker", "name": "test" });
+        let overlay = serde_json::json!({ "engine": null, "name": "test" });
+        let merged = merge_values(base, overlay);
+        assert_eq!(merged["engine"], "docker");
+    }
+
+    #[test]
+    fn merge_values_star_null_removes_key() {
+        let base = serde_json::json!({ "serve_command": "old" });
+        let overlay = serde_json::json!({ "*serve_command": null });
+        let merged = merge_values(base, overlay);
+        assert!(merged.get("serve_command").is_none());
+    }
+
+    #[test]
+    fn merge_values_star_value_force_replaces() {
+        let base = serde_json::json!({ "cmd": "old" });
+        let overlay = serde_json::json!({ "*cmd": "new" });
+        let merged = merge_values(base, overlay);
+        assert_eq!(merged["cmd"], "new");
     }
 }

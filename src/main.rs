@@ -200,36 +200,54 @@ enum SetGrpCommand {
         domain_name: String,
         group_name: String,
         default_environment: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set image_repository on a group
     ImageRepository {
         domain_name: String,
         group_name: String,
         image_repository: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set serve_command on a group
     ServeCommand {
         domain_name: String,
         group_name: String,
         serve_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set shell_command on a group (used by `darp shell`)
     ShellCommand {
         domain_name: String,
         group_name: String,
         shell_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set platform architecture (e.g., linux/amd64) on a group
     Platform {
         domain_name: String,
         group_name: String,
         platform: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set default_container_image on a group (used when no image is passed on the CLI)
     DefaultContainerImage {
         domain_name: String,
         group_name: String,
         default_container_image: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -270,6 +288,9 @@ enum SetSvcCommand {
         group_name: String,
         service_name: String,
         image_repository: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set serve_command on a service
     ServeCommand {
@@ -277,6 +298,9 @@ enum SetSvcCommand {
         group_name: String,
         service_name: String,
         serve_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set shell_command on a service (used by `darp shell`)
     ShellCommand {
@@ -284,6 +308,9 @@ enum SetSvcCommand {
         group_name: String,
         service_name: String,
         shell_command: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set platform architecture (e.g., linux/amd64) on a service
     Platform {
@@ -291,6 +318,9 @@ enum SetSvcCommand {
         group_name: String,
         service_name: String,
         platform: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Set default_container_image on a service (used when no image is passed on the CLI)
     DefaultContainerImage {
@@ -298,6 +328,9 @@ enum SetSvcCommand {
         group_name: String,
         service_name: String,
         default_container_image: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -367,17 +400,15 @@ enum AddDomCommand {
 
 #[derive(Subcommand, Debug)]
 enum AddGrpCommand {
-    /// Create a new group in a domain
-    Group {
-        domain_name: String,
-        group_name: String,
-    },
     /// Add port mapping to a group
     Portmap {
         domain_name: String,
         group_name: String,
         host_port: String,
         container_port: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add variable to a group
     Variable {
@@ -385,6 +416,9 @@ enum AddGrpCommand {
         group_name: String,
         name: String,
         value: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add volume to a group
     Volume {
@@ -392,6 +426,9 @@ enum AddGrpCommand {
         group_name: String,
         container_dir: String,
         host_dir: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -426,6 +463,9 @@ enum AddSvcCommand {
         service_name: String,
         host_port: String,
         container_port: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add variable to a service
     Variable {
@@ -434,6 +474,9 @@ enum AddSvcCommand {
         service_name: String,
         name: String,
         value: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
     /// Add volume to a service
     Volume {
@@ -442,6 +485,9 @@ enum AddSvcCommand {
         service_name: String,
         container_dir: String,
         host_dir: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
     },
 }
 
@@ -2758,7 +2804,9 @@ fn cmd_set(
                 group_name,
                 service_name,
                 image_repository,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_service_image_repository(
                     &domain_name,
                     &group_name,
@@ -2776,7 +2824,9 @@ fn cmd_set(
                 group_name,
                 service_name,
                 serve_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_service_serve_command(
                     &domain_name,
                     &group_name,
@@ -2794,7 +2844,9 @@ fn cmd_set(
                 group_name,
                 service_name,
                 shell_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_service_shell_command(
                     &domain_name,
                     &group_name,
@@ -2812,7 +2864,9 @@ fn cmd_set(
                 group_name,
                 service_name,
                 platform,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_service_platform(&domain_name, &group_name, &service_name, &platform)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2825,7 +2879,9 @@ fn cmd_set(
                 group_name,
                 service_name,
                 default_container_image,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_service_default_container_image(
                     &domain_name,
                     &group_name,
@@ -2925,7 +2981,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 default_environment,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_default_environment(
                     &domain_name,
                     &group_name,
@@ -2941,7 +2999,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 image_repository,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_image_repository(&domain_name, &group_name, &image_repository)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2953,7 +3013,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 serve_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_serve_command(&domain_name, &group_name, &serve_command)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2965,7 +3027,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 shell_command,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_shell_command(&domain_name, &group_name, &shell_command)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2977,7 +3041,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 platform,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_platform(&domain_name, &group_name, &platform)?;
                 config.save(&paths.config_path)?;
                 println!(
@@ -2989,7 +3055,9 @@ fn cmd_set(
                 domain_name,
                 group_name,
                 default_container_image,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.set_group_default_container_image(
                     &domain_name,
                     &group_name,
@@ -3072,19 +3140,14 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
             }
         },
         AddCommand::Grp { cmd } => match cmd {
-            AddGrpCommand::Group {
-                domain_name,
-                group_name,
-            } => {
-                config.add_group(&domain_name, &group_name)?;
-                config.save(&paths.config_path)?;
-            }
             AddGrpCommand::Portmap {
                 domain_name,
                 group_name,
                 host_port,
                 container_port,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_group_portmap(&domain_name, &group_name, &host_port, &container_port)?;
                 config.save(&paths.config_path)?;
             }
@@ -3093,7 +3156,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 group_name,
                 name,
                 value,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_group_variable(&domain_name, &group_name, &name, &value)?;
                 config.save(&paths.config_path)?;
             }
@@ -3102,7 +3167,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 group_name,
                 container_dir,
                 host_dir,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_group_volume(&domain_name, &group_name, &container_dir, &host_dir)?;
                 config.save(&paths.config_path)?;
             }
@@ -3140,7 +3207,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 service_name,
                 host_port,
                 container_port,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_portmap(
                     &domain_name,
                     &group_name,
@@ -3156,7 +3225,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 service_name,
                 name,
                 value,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_variable(&domain_name, &group_name, &service_name, &name, &value)?;
                 config.save(&paths.config_path)?;
             }
@@ -3166,7 +3237,9 @@ fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::R
                 service_name,
                 container_dir,
                 host_dir,
+                location,
             } => {
+                config.ensure_domain_exists(&domain_name, location.as_deref())?;
                 config.add_service_volume(
                     &domain_name,
                     &group_name,
