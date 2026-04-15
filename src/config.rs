@@ -71,7 +71,7 @@ pub fn resolve_location(location: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(resolved))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Domain {
     pub location: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,6 +160,78 @@ pub struct Environment {
     pub default_container_image: Option<String>,
 }
 
+/// A borrow-based view of the 8 cascadable fields from any config layer.
+struct CascadeLayer<'a> {
+    serve_command: Option<&'a str>,
+    shell_command: Option<&'a str>,
+    image_repository: Option<&'a str>,
+    platform: Option<&'a str>,
+    default_container_image: Option<&'a str>,
+    host_portmappings: Option<&'a BTreeMap<String, String>>,
+    variables: Option<&'a BTreeMap<String, String>>,
+    volumes: Option<&'a Vec<Volume>>,
+}
+
+impl<'a> From<&'a Domain> for CascadeLayer<'a> {
+    fn from(d: &'a Domain) -> Self {
+        Self {
+            serve_command: d.serve_command.as_deref(),
+            shell_command: d.shell_command.as_deref(),
+            image_repository: d.image_repository.as_deref(),
+            platform: d.platform.as_deref(),
+            default_container_image: d.default_container_image.as_deref(),
+            host_portmappings: d.host_portmappings.as_ref(),
+            variables: d.variables.as_ref(),
+            volumes: d.volumes.as_ref(),
+        }
+    }
+}
+
+impl<'a> From<&'a Group> for CascadeLayer<'a> {
+    fn from(g: &'a Group) -> Self {
+        Self {
+            serve_command: g.serve_command.as_deref(),
+            shell_command: g.shell_command.as_deref(),
+            image_repository: g.image_repository.as_deref(),
+            platform: g.platform.as_deref(),
+            default_container_image: g.default_container_image.as_deref(),
+            host_portmappings: g.host_portmappings.as_ref(),
+            variables: g.variables.as_ref(),
+            volumes: g.volumes.as_ref(),
+        }
+    }
+}
+
+impl<'a> From<&'a Service> for CascadeLayer<'a> {
+    fn from(s: &'a Service) -> Self {
+        Self {
+            serve_command: s.serve_command.as_deref(),
+            shell_command: s.shell_command.as_deref(),
+            image_repository: s.image_repository.as_deref(),
+            platform: s.platform.as_deref(),
+            default_container_image: s.default_container_image.as_deref(),
+            host_portmappings: s.host_portmappings.as_ref(),
+            variables: s.variables.as_ref(),
+            volumes: s.volumes.as_ref(),
+        }
+    }
+}
+
+impl<'a> From<&'a Environment> for CascadeLayer<'a> {
+    fn from(e: &'a Environment) -> Self {
+        Self {
+            serve_command: e.serve_command.as_deref(),
+            shell_command: e.shell_command.as_deref(),
+            image_repository: e.image_repository.as_deref(),
+            platform: e.platform.as_deref(),
+            default_container_image: e.default_container_image.as_deref(),
+            host_portmappings: e.host_portmappings.as_ref(),
+            variables: e.variables.as_ref(),
+            volumes: e.volumes.as_ref(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ResolvedSettings {
     pub domain_name: String,
@@ -174,6 +246,81 @@ pub struct ResolvedSettings {
     pub host_portmappings: Option<BTreeMap<String, String>>,
     pub variables: Option<BTreeMap<String, String>>,
     pub volumes: Option<Vec<Volume>>,
+}
+
+impl ResolvedSettings {
+    /// Resolve cascading settings from service > group > domain > environment.
+    /// The first layer to provide a value for each field wins.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve(
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+        environment_name: Option<String>,
+        service: Option<&Service>,
+        group: Option<&Group>,
+        domain: &Domain,
+        environment: Option<&Environment>,
+    ) -> Self {
+        let layers: [Option<CascadeLayer>; 4] = [
+            service.map(CascadeLayer::from),
+            group.map(CascadeLayer::from),
+            Some(CascadeLayer::from(domain)),
+            environment.map(CascadeLayer::from),
+        ];
+
+        Self {
+            domain_name,
+            group_name,
+            service_name,
+            environment_name,
+            serve_command: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.serve_command)
+                .map(String::from),
+            shell_command: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.shell_command)
+                .map(String::from),
+            image_repository: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.image_repository)
+                .map(String::from),
+            platform: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.platform)
+                .map(String::from),
+            default_container_image: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.default_container_image)
+                .map(String::from),
+            host_portmappings: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.host_portmappings)
+                .cloned(),
+            variables: layers.iter().flatten().find_map(|l| l.variables).cloned(),
+            volumes: layers.iter().flatten().find_map(|l| l.volumes).cloned(),
+        }
+    }
+
+    /// Returns the resolved image name: image_repository:base_image, or just base_image.
+    /// If cli_image is provided, it takes precedence over default_container_image.
+    pub fn resolve_full_image_name(&self, cli_image: Option<&str>) -> Option<String> {
+        let base = cli_image
+            .map(String::from)
+            .or_else(|| self.default_container_image.clone())?;
+
+        match &self.image_repository {
+            Some(repo) => Some(format!("{}:{}", repo, base)),
+            None => Some(base),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +340,18 @@ fn strip_nulls(value: &mut serde_json::Value) {
             strip_nulls(v);
         }
     }
+}
+
+pub struct ServiceContext<'a> {
+    pub current_dir: PathBuf,
+    pub current_directory_name: String,
+    pub domain_name: String,
+    pub domain: &'a Domain,
+    pub group_name: String,
+    pub group: Option<&'a Group>,
+    pub service: Option<&'a Service>,
+    pub environment_name: Option<String>,
+    pub environment: Option<&'a Environment>,
 }
 
 impl Config {
@@ -255,6 +414,40 @@ impl Config {
             self.pre_config = None;
         }
         Ok(())
+    }
+
+    /// Build a full ServiceContext from the current working directory.
+    /// Returns None when cwd isn't inside any configured domain.
+    pub fn service_context_from_cwd(&self, env_cli: Option<String>) -> Option<ServiceContext<'_>> {
+        let current_dir = std::env::current_dir().ok()?;
+        let current_directory_name = current_dir.file_name()?.to_string_lossy().to_string();
+
+        let (domain_name, domain, group_name, group) = self.find_context_by_cwd(&current_dir)?;
+        let domain_name = domain_name.to_string();
+
+        let service = group
+            .and_then(|g| g.services.as_ref())
+            .and_then(|s| s.get(&current_directory_name));
+
+        let environment_name: Option<String> = env_cli
+            .or_else(|| group.and_then(|g| g.default_environment.clone()))
+            .or_else(|| domain.default_environment.clone());
+
+        let environment = environment_name
+            .as_ref()
+            .and_then(|name| self.environments.as_ref().and_then(|e| e.get(name)));
+
+        Some(ServiceContext {
+            current_dir,
+            current_directory_name,
+            domain_name,
+            domain,
+            group_name,
+            group,
+            service,
+            environment_name,
+            environment,
+        })
     }
 
     /// Find domain, group, and service context from the current working directory.
@@ -333,37 +526,6 @@ impl Config {
             .replace(PSEUDO_HOME_TOKEN, &home.to_string_lossy());
 
         Ok(PathBuf::from(s))
-    }
-
-    pub fn resolve_image_name(
-        &self,
-        environment: Option<&Environment>,
-        group: Option<&Group>,
-        domain: Option<&Domain>,
-        service: Option<&Service>,
-        cli_image: &str,
-    ) -> String {
-        if let Some(svc) = service {
-            if let Some(repo) = &svc.image_repository {
-                return format!("{repo}:{image}", repo = repo, image = cli_image);
-            }
-        }
-        if let Some(grp) = group {
-            if let Some(repo) = &grp.image_repository {
-                return format!("{repo}:{image}", repo = repo, image = cli_image);
-            }
-        }
-        if let Some(dom) = domain {
-            if let Some(repo) = &dom.image_repository {
-                return format!("{repo}:{image}", repo = repo, image = cli_image);
-            }
-        }
-        if let Some(env) = environment {
-            if let Some(repo) = &env.image_repository {
-                return format!("{repo}:{image}", repo = repo, image = cli_image);
-            }
-        }
-        cli_image.to_string()
     }
 
     // --- domain/env helpers ---

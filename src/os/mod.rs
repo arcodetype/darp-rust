@@ -8,6 +8,57 @@ use std::process::{Command, Stdio};
 
 const NGINX_CONF: &str = include_str!("../../assets/nginx.conf");
 
+pub const HOSTS_HEADER: &str = "# --- DARP HOSTS START ---";
+pub const HOSTS_FOOTER: &str = "# --- DARP HOSTS END ---";
+
+/// Parse an existing hosts file, replace the DARP block with new entries,
+/// and return the full new file content.
+pub fn build_hosts_content(current_raw: &str, hosts_container_lines: &[String]) -> String {
+    let current = current_raw.replace("\r\n", "\n");
+
+    let (before, after) = if let Some(s) = current.find(HOSTS_HEADER) {
+        if let Some(e) = current[s..].find(HOSTS_FOOTER) {
+            let end = s + e + HOSTS_FOOTER.len();
+            (
+                current[..s].trim_end_matches('\n').to_string(),
+                current[end..].trim_start_matches('\n').to_string(),
+            )
+        } else {
+            (current.trim_end_matches('\n').to_string(), String::new())
+        }
+    } else {
+        (current.trim_end_matches('\n').to_string(), String::new())
+    };
+
+    let mut block = String::new();
+    block.push_str(HOSTS_HEADER);
+    block.push('\n');
+    for line in hosts_container_lines {
+        let parts: Vec<_> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            block.push_str(&format!("127.0.0.1   {}\n", parts[1]));
+        }
+    }
+    block.push_str(HOSTS_FOOTER);
+    block.push('\n');
+
+    let mut new_contents = String::new();
+    if !before.is_empty() {
+        new_contents.push_str(before.trim_end_matches('\n'));
+        new_contents.push('\n');
+    }
+    new_contents.push('\n');
+    new_contents.push_str(block.trim_end_matches('\n'));
+    new_contents.push('\n');
+    if !after.is_empty() {
+        new_contents.push('\n');
+        new_contents.push_str(after.trim_start_matches('\n'));
+        new_contents.push('\n');
+    }
+
+    new_contents
+}
+
 pub struct OsIntegration<'a> {
     paths: &'a DarpPaths,
     resolver_file: &'static str,
@@ -90,8 +141,6 @@ impl<'a> OsIntegration<'a> {
     pub fn sync_system_hosts(&self, hosts_container_lines: &[String]) -> Result<()> {
         #[cfg(unix)]
         {
-            let header = "# --- DARP HOSTS START ---";
-            let footer = "# --- DARP HOSTS END ---";
             let hosts_path = "/etc/hosts";
 
             let output = Command::new("sudo")
@@ -100,54 +149,8 @@ impl<'a> OsIntegration<'a> {
                 .output()
                 .map_err(|e| anyhow!("unable to read {} via sudo: {}", hosts_path, e))?;
 
-            let mut current = String::from_utf8_lossy(&output.stdout).into_owned();
-            current = current.replace("\r\n", "\n");
-
-            let start = current.find(header);
-            let before: String;
-            let after: String;
-
-            if let Some(s) = start {
-                if let Some(e) = current[s..].find(footer) {
-                    let end = s + e + footer.len();
-                    before = current[..s].trim_end_matches('\n').to_string();
-                    after = current[end..].trim_start_matches('\n').to_string();
-                } else {
-                    before = current.trim_end_matches('\n').to_string();
-                    after = String::new();
-                }
-            } else {
-                before = current.trim_end_matches('\n').to_string();
-                after = String::new();
-            }
-
-            // Build new block
-            let mut block = String::new();
-            block.push_str(header);
-            block.push('\n');
-            for line in hosts_container_lines {
-                let parts: Vec<_> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let host = parts[1];
-                    block.push_str(&format!("127.0.0.1   {}\n", host));
-                }
-            }
-            block.push_str(footer);
-            block.push('\n');
-
-            let mut new_contents = String::new();
-            if !before.is_empty() {
-                new_contents.push_str(before.trim_end_matches('\n'));
-                new_contents.push('\n');
-            }
-            new_contents.push('\n');
-            new_contents.push_str(block.trim_end_matches('\n'));
-            new_contents.push('\n');
-            if !after.is_empty() {
-                new_contents.push('\n');
-                new_contents.push_str(after.trim_start_matches('\n'));
-                new_contents.push('\n');
-            }
+            let current = String::from_utf8_lossy(&output.stdout).into_owned();
+            let new_contents = build_hosts_content(&current, hosts_container_lines);
 
             let mut child = Command::new("sudo")
                 .arg("tee")
@@ -182,64 +185,17 @@ impl<'a> OsIntegration<'a> {
     }
 
     pub fn sync_windows_hosts(&self, hosts_container_lines: &[String]) -> Result<()> {
-        let header = "# --- DARP HOSTS START ---";
-        let footer = "# --- DARP HOSTS END ---";
         let hosts_path = "/mnt/c/Windows/System32/drivers/etc/hosts";
 
-        let mut current = fs::read_to_string(hosts_path).map_err(|e| {
+        let current = fs::read_to_string(hosts_path).map_err(|e| {
             anyhow!(
                 "Unable to read Windows hosts file at {}: {}. Ensure WSL is running as Administrator.",
                 hosts_path,
                 e
             )
         })?;
-        current = current.replace("\r\n", "\n");
 
-        let start = current.find(header);
-        let before: String;
-        let after: String;
-
-        if let Some(s) = start {
-            if let Some(e) = current[s..].find(footer) {
-                let end = s + e + footer.len();
-                before = current[..s].trim_end_matches('\n').to_string();
-                after = current[end..].trim_start_matches('\n').to_string();
-            } else {
-                before = current.trim_end_matches('\n').to_string();
-                after = String::new();
-            }
-        } else {
-            before = current.trim_end_matches('\n').to_string();
-            after = String::new();
-        }
-
-        // Build new block
-        let mut block = String::new();
-        block.push_str(header);
-        block.push('\n');
-        for line in hosts_container_lines {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let host = parts[1];
-                block.push_str(&format!("127.0.0.1   {}\n", host));
-            }
-        }
-        block.push_str(footer);
-        block.push('\n');
-
-        let mut new_contents = String::new();
-        if !before.is_empty() {
-            new_contents.push_str(before.trim_end_matches('\n'));
-            new_contents.push('\n');
-        }
-        new_contents.push('\n');
-        new_contents.push_str(block.trim_end_matches('\n'));
-        new_contents.push('\n');
-        if !after.is_empty() {
-            new_contents.push('\n');
-            new_contents.push_str(after.trim_start_matches('\n'));
-            new_contents.push('\n');
-        }
+        let new_contents = build_hosts_content(&current, hosts_container_lines);
 
         fs::write(hosts_path, new_contents.as_bytes()).map_err(|e| {
             anyhow!(

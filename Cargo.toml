@@ -2,7 +2,7 @@
 name = "darp"
 version = "1.0.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 description = "Directories auto-reverse proxied — turn local project folders into .test domains with Docker/Podman"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arcodetype/darp-rust"
@@ -25,6 +25,9 @@ dirs = "5.0"
 [dependencies.ctrlc]
 version = "3.4"
 features = ["termination"]
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = []
