@@ -51,10 +51,15 @@ pub struct PreConfig {
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_config: Option<Vec<PreConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub podman_machine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domains: Option<std::collections::BTreeMap<String, Domain>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environments: Option<std::collections::BTreeMap<String, Environment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub urls_in_hosts: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl: Option<bool>,
@@ -69,89 +74,89 @@ pub fn resolve_location(location: &str) -> Result<PathBuf> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Domain {
     pub location: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<BTreeMap<String, Group>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_environment: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Group {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub services: Option<BTreeMap<String, Service>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_environment: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Service {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Environment {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
 }
 
@@ -177,6 +182,19 @@ pub struct Volume {
     pub host: String,
 }
 
+fn strip_nulls(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|_, v| !v.is_null());
+        for v in obj.values_mut() {
+            strip_nulls(v);
+        }
+    } else if let Some(arr) = value.as_array_mut() {
+        for v in arr.iter_mut() {
+            strip_nulls(v);
+        }
+    }
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -198,7 +216,9 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let data = serde_json::to_vec_pretty(self)?;
+        let mut value = serde_json::to_value(self)?;
+        strip_nulls(&mut value);
+        let data = serde_json::to_vec_pretty(&value)?;
         fs::write(path, data)?;
         Ok(())
     }
@@ -2824,10 +2844,17 @@ pub fn merge_values(base: serde_json::Value, overlay: serde_json::Value) -> serd
 
             for (key, overlay_val) in overlay_map {
                 if let Some(actual_key) = key.strip_prefix('*') {
-                    // Force replace: no recursion
                     let actual_key = actual_key.to_string();
                     star_overrides.insert(actual_key.clone());
-                    base_map.insert(actual_key, overlay_val);
+                    if overlay_val.is_null() {
+                        // *key: null means force-remove from parent
+                        base_map.remove(&actual_key);
+                    } else {
+                        // *key: value means force-replace (no recursion)
+                        base_map.insert(actual_key, overlay_val);
+                    }
+                } else if overlay_val.is_null() {
+                    continue; // Plain null: don't override base values
                 } else if let Some(base_val) = base_map.remove(&key) {
                     // Recursive merge
                     base_map.insert(key, merge_values(base_val, overlay_val));
@@ -2844,9 +2871,9 @@ pub fn merge_values(base: serde_json::Value, overlay: serde_json::Value) -> serd
             base_arr.extend(overlay_arr);
             Value::Array(base_arr)
         }
-        (_, overlay) => {
-            // Scalar or type mismatch: overlay wins
-            overlay
+        (base, overlay) => {
+            // Scalar or type mismatch: overlay wins, unless overlay is null
+            if overlay.is_null() { base } else { overlay }
         }
     }
 }
