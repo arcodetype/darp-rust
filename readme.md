@@ -22,15 +22,15 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ```sh
 # macOS (Apple Silicon)
-curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv darp-*/darp /usr/local/bin/
 
 # macOS (Intel)
-curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-x86_64-apple-darwin.tar.gz | tar xz
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-x86_64-apple-darwin.tar.gz | tar xz
 sudo mv darp-*/darp /usr/local/bin/
 
 # Linux (x86_64)
-curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-v0.1.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -sL https://github.com/arcodetype/darp-rust/releases/latest/download/darp-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv darp-*/darp /usr/local/bin/
 ```
 

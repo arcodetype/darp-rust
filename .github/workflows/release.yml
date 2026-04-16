@@ -47,8 +47,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          name="darp-${tag}-${{ matrix.target }}"
+          name="darp-${{ matrix.target }}"
           mkdir -p "$name"
           cp "target/${{ matrix.target }}/release/darp" "$name/"
           cp readme.md LICENSE-MIT LICENSE-APACHE "$name/"
