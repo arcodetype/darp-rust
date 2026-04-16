@@ -53,7 +53,7 @@ darp shell --dry-run               # print without running
 
 ### `darp urls`
 
-Lists all registered URLs and their ports.
+Lists all registered URLs and their ports, grouped by service group. Services under named groups appear under a cyan group header; services in the default group (`.`) are listed without a header.
 
 ```sh
 darp urls
