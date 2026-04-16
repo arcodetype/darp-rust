@@ -397,7 +397,9 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
                         let service_count: usize = portmap.as_object().map_or(0, |o| {
                             o.values()
                                 .filter_map(|v| v.as_object())
-                                .map(|m| m.len())
+                                .flat_map(|groups| groups.values())
+                                .filter_map(|g| g.as_object())
+                                .map(|services| services.len())
                                 .sum()
                         });
                         s.ok(&format!(

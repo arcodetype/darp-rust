@@ -102,7 +102,8 @@ fn build_container_command(
 
     let rev_proxy_port = portmap
         .get(&resolved.domain_name)
-        .and_then(|d| d.get(&resolved.service_name))
+        .and_then(|d| d.get(&resolved.group_name))
+        .and_then(|g| g.get(&resolved.service_name))
         .and_then(|v| v.as_u64())
         .unwrap_or_else(|| {
             eprintln!(
