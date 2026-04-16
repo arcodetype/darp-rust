@@ -1225,17 +1225,36 @@ pub fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
     if let Some(obj) = portmap.as_object() {
         for (domain_name, domain) in obj.iter() {
             println!("{}", domain_name.green());
-            if let Some(d) = domain.as_object() {
-                let mut entries: Vec<_> = d.iter().collect();
-                entries.sort_by_key(|(k, _)| *k);
-                for (folder_name, port) in entries {
-                    let port = port.as_u64().unwrap_or(0);
-                    println!(
-                        "  http://{}.{}.test ({})",
-                        folder_name.blue(),
-                        domain_name,
-                        port
-                    );
+            if let Some(groups) = domain.as_object() {
+                let mut group_entries: Vec<_> = groups.iter().collect();
+                group_entries.sort_by(|(a, _), (b, _)| match (a.as_str(), b.as_str()) {
+                    (".", _) => std::cmp::Ordering::Less,
+                    (_, ".") => std::cmp::Ordering::Greater,
+                    _ => a.cmp(b),
+                });
+
+                for (group_name, group) in group_entries {
+                    if let Some(services) = group.as_object() {
+                        let indent = if group_name == "." {
+                            "  "
+                        } else {
+                            println!("  {}", group_name.cyan());
+                            "    "
+                        };
+
+                        let mut entries: Vec<_> = services.iter().collect();
+                        entries.sort_by_key(|(k, _)| *k);
+                        for (service_name, port) in entries {
+                            let port = port.as_u64().unwrap_or(0);
+                            println!(
+                                "{}http://{}.{}.test ({})",
+                                indent,
+                                service_name.blue(),
+                                domain_name.green(),
+                                port
+                            );
+                        }
+                    }
                 }
             }
             println!();

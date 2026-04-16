@@ -59,14 +59,20 @@ pub fn cmd_deploy(
 
         // Helper closure to register a service folder
         let register_service = |folder_name: &str,
+                                group_name: &str,
                                 port_number: &mut u16,
                                 domain_map: &mut serde_json::Map<String, serde_json::Value>,
                                 hosts_container_lines: &mut Vec<String>|
          -> anyhow::Result<()> {
-            domain_map.insert(
-                folder_name.to_string(),
-                serde_json::Value::Number((*port_number).into()),
-            );
+            let group_obj = domain_map
+                .entry(group_name.to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(group_map) = group_obj.as_object_mut() {
+                group_map.insert(
+                    folder_name.to_string(),
+                    serde_json::Value::Number((*port_number).into()),
+                );
+            }
 
             let url = format!(
                 "{folder}.{domain}.test",
@@ -101,6 +107,7 @@ pub fn cmd_deploy(
                         if !group_names.contains(&folder_name) {
                             register_service(
                                 &folder_name,
+                                ".",
                                 &mut port_number,
                                 &mut domain_map,
                                 &mut hosts_container_lines,
@@ -121,6 +128,7 @@ pub fn cmd_deploy(
                         let folder_name = entry.file_name().to_string_lossy().to_string();
                         register_service(
                             &folder_name,
+                            group_name,
                             &mut port_number,
                             &mut domain_map,
                             &mut hosts_container_lines,
