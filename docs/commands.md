@@ -4,13 +4,13 @@
 
 ### `darp install`
 
-Sets up system integration: DNS resolver, nginx config, dnsmasq, and shell completions (bash/zsh/fish).
+Sets up system integration: DNS resolver, nginx config, dnsmasq, and shell completions (bash/zsh/fish). Also probes your container engine for the host-gateway IP and caches it at `~/.darp/container_host_ip` so `darp deploy` can bake a platform-correct `host.docker.internal` / `host.containers.internal` entry into in-container `/etc/hosts`.
 
 ```sh
 darp install
 ```
 
-Run this again if you switch between Docker and Podman.
+Run this again if you switch between Docker and Podman, or if you change Docker's network configuration.
 
 ### `darp uninstall`
 

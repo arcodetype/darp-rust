@@ -1,8 +1,19 @@
 use std::io::Write;
 
 use crate::config::{self, Config, DarpPaths};
-use crate::engine::Engine;
+use crate::engine::{self, Engine};
 use crate::os::OsIntegration;
+
+/// Build the contents of `~/.darp/hosts_container` — loopback + host-gateway +
+/// one `0.0.0.0 <url>` line per configured service URL.
+pub fn build_container_hosts(gateway_ip: &str, gateway_name: &str, url_lines: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str("127.0.0.1\tlocalhost\n");
+    out.push_str("::1\tlocalhost ip6-localhost ip6-loopback\n");
+    out.push_str(&format!("{gateway_ip}\t{gateway_name}\n"));
+    out.push_str(&url_lines.join(""));
+    out
+}
 
 pub fn cmd_deploy(
     paths: &DarpPaths,
@@ -141,7 +152,19 @@ pub fn cmd_deploy(
         portmap.insert(domain_name.clone(), serde_json::Value::Object(domain_map));
     }
 
-    std::fs::write(&paths.hosts_container_path, hosts_container_lines.join(""))?;
+    let gateway_ip =
+        match engine::read_container_host_ip(&paths.container_host_ip_path, &engine.kind) {
+            Some(ip) => ip,
+            None => {
+                let ip = engine.probe_host_gateway_ip()?;
+                engine::write_container_host_ip(&paths.container_host_ip_path, &engine.kind, &ip)?;
+                ip
+            }
+        };
+
+    let hosts_content =
+        build_container_hosts(&gateway_ip, engine.host_gateway(), &hosts_container_lines);
+    std::fs::write(&paths.hosts_container_path, hosts_content)?;
     std::fs::write(&paths.portmap_path, serde_json::to_vec_pretty(&portmap)?)?;
 
     // Restart reverse proxy and stop darp_* containers

@@ -30,6 +30,33 @@ impl EngineKind {
             EngineKind::None => None,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EngineKind::Podman => "podman",
+            EngineKind::Docker => "docker",
+            EngineKind::None => "none",
+        }
+    }
+}
+
+/// Read the cached host-gateway IP. Returns `None` if the file is missing, malformed,
+/// or was written for a different engine (so the caller re-probes after an engine switch).
+pub fn read_container_host_ip(path: &std::path::Path, kind: &EngineKind) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut lines = content.lines();
+    let cached_kind = lines.next()?.trim();
+    let cached_ip = lines.next()?.trim();
+    if cached_kind == kind.as_str() && !cached_ip.is_empty() {
+        Some(cached_ip.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn write_container_host_ip(path: &std::path::Path, kind: &EngineKind, ip: &str) -> Result<()> {
+    std::fs::write(path, format!("{}\n{}\n", kind.as_str(), ip))
+        .map_err(|e| anyhow!("failed to write {}: {}", path.display(), e))
 }
 
 pub struct Engine {
@@ -234,6 +261,55 @@ impl Engine {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// Ask the engine to expand `host-gateway` in a throwaway container and return the IP.
+    ///
+    /// Docker Desktop and Docker Engine / Podman each map `host-gateway` to a different
+    /// IP (VM-internal bridge vs. host-routable magic address), so this is the only way
+    /// to learn the platform-correct value without guessing.
+    pub fn probe_host_gateway_ip(&self) -> Result<String> {
+        let bin = self
+            .bin
+            .ok_or_else(|| anyhow!("no container engine configured"))?;
+
+        const PROBE_HOST: &str = "_darp_probe_";
+
+        let output = Command::new(bin)
+            .arg("run")
+            .arg("--rm")
+            .arg("--add-host")
+            .arg(format!("{PROBE_HOST}:host-gateway"))
+            .arg("nginx")
+            .arg("cat")
+            .arg("/etc/hosts")
+            .output()
+            .map_err(|e| anyhow!("failed to run probe container: {}", e))?;
+
+        if !output.status.success() {
+            return Err(anyhow!(
+                "probe container exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let mut parts = line.split_whitespace();
+            let ip = parts.next();
+            let name = parts.next();
+            if name == Some(PROBE_HOST) {
+                if let Some(ip) = ip {
+                    return Ok(ip.to_string());
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "probe container did not return a {} entry in /etc/hosts",
+            PROBE_HOST
+        ))
     }
 
     pub fn start_reverse_proxy(&self, paths: &DarpPaths) -> Result<()> {

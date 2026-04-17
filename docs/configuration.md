@@ -79,6 +79,10 @@ The environment is determined by:
 }
 ```
 
+## In-container `/etc/hosts`
+
+darp bind-mounts a managed hosts file over `/etc/hosts` inside every `darp shell` / `darp serve` container. That file includes standard loopback entries, a line for the container engine's host-gateway (`host.docker.internal` or `host.containers.internal` resolved to the platform-correct IP), and one `0.0.0.0 <service>.<domain>.test` line per service for intra-service reachability. The gateway IP is probed once by `darp install` and cached at `~/.darp/container_host_ip`; `darp deploy` re-probes automatically if the cache is missing or was written for a different engine.
+
 ## Tokens
 
 These tokens are expanded at runtime:

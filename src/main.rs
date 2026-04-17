@@ -3,7 +3,7 @@ use clap::{CommandFactory, Parser};
 use darp::cli::*;
 use darp::commands::*;
 use darp::config::{Config, DarpPaths};
-use darp::engine::{Engine, EngineKind};
+use darp::engine::{self, Engine, EngineKind};
 use darp::os::OsIntegration;
 
 fn main() -> anyhow::Result<()> {
@@ -102,6 +102,24 @@ fn cmd_install(
     engine.configure_unprivileged_ports_if_needed()?;
 
     install_shell_completions()?;
+
+    // Probe the container engine for its host-gateway IP and cache it for deploy.
+    // Skipped if the engine isn't configured or isn't currently running — deploy
+    // will re-probe on demand.
+    if engine.require_ready().is_ok() {
+        match engine.probe_host_gateway_ip() {
+            Ok(ip) => {
+                engine::write_container_host_ip(&paths.container_host_ip_path, &engine.kind, &ip)?;
+                println!("cached container host gateway: {}", ip);
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: could not probe container host gateway ({}); deploy will retry",
+                    e
+                );
+            }
+        }
+    }
 
     config.save(&paths.config_path)?;
     Ok(())

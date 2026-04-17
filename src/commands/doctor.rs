@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::commands::completions::{RC_START_MARKER, detect_shell};
 use crate::config::{self, Config, DarpPaths, ResolvedSettings};
-use crate::engine::Engine;
+use crate::engine::{self, Engine};
 
 enum CheckResult {
     Ok(String),
@@ -434,6 +434,17 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
             s.ok("hosts_container exists");
         } else {
             s.warn("hosts_container not found — run 'darp deploy'");
+        }
+
+        if paths.container_host_ip_path.is_file() {
+            match engine::read_container_host_ip(&paths.container_host_ip_path, &engine.kind) {
+                Some(ip) => s.ok(&format!("container host gateway cached ({})", ip)),
+                None => {
+                    s.warn("container_host_ip is for a different engine — run 'darp install' again")
+                }
+            }
+        } else {
+            s.warn("container_host_ip not cached — run 'darp install' (deploy will retry)");
         }
 
         if !s.passed() {

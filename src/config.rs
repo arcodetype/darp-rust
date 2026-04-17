@@ -19,6 +19,7 @@ pub struct DarpPaths {
     pub vhost_container_conf: PathBuf,
     pub hosts_container_path: PathBuf,
     pub nginx_conf_path: PathBuf,
+    pub container_host_ip_path: PathBuf,
 }
 
 impl DarpPaths {
@@ -36,6 +37,7 @@ impl DarpPaths {
             vhost_container_conf: darp_root.join("vhost_container.conf"),
             hosts_container_path: darp_root.join("hosts_container"),
             nginx_conf_path: darp_root.join("nginx.conf"),
+            container_host_ip_path: darp_root.join("container_host_ip"),
         })
     }
 }
