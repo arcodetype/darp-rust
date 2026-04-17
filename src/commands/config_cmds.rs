@@ -130,6 +130,31 @@ pub fn cmd_set(
             }
         },
         SetCommand::Svc { cmd } => match cmd {
+            SetSvcCommand::DefaultEnvironment {
+                domain_name,
+                group_name,
+                service_name,
+                default_environment,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_service_default_environment(
+                            &domain_name,
+                            &group_name,
+                            &service_name,
+                            &default_environment,
+                        )
+                    },
+                    Some(format!(
+                        "Set default_environment for service '{}.{}' to '{}'",
+                        domain_name, service_name, default_environment
+                    )),
+                )?;
+            }
             SetSvcCommand::ImageRepository {
                 domain_name,
                 group_name,
@@ -1019,6 +1044,21 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
             }
         },
         RmCommand::Svc { cmd } => match cmd {
+            RmSvcCommand::DefaultEnvironment {
+                domain_name,
+                group_name,
+                service_name,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_service_default_environment(&domain_name, &group_name, &service_name),
+                    Some(format!(
+                        "Removed default_environment for service '{}.{}'",
+                        domain_name, service_name
+                    )),
+                )?;
+            }
             RmSvcCommand::Portmap {
                 domain_name,
                 group_name,

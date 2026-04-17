@@ -123,6 +123,8 @@ pub struct Group {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Service {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
@@ -430,6 +432,7 @@ impl Config {
             .and_then(|s| s.get(&current_directory_name));
 
         let environment_name: Option<String> = env_cli
+            .or_else(|| service.and_then(|s| s.default_environment.clone()))
             .or_else(|| group.and_then(|g| g.default_environment.clone()))
             .or_else(|| domain.default_environment.clone());
 
@@ -2394,6 +2397,84 @@ impl Config {
             "Removed volume from service '{}.{}': {} -> {}",
             domain_name, service_name, host_dir, container_dir
         );
+        Ok(())
+    }
+
+    // Service-level serve_command
+
+    // Service-level default_environment
+
+    pub fn set_service_default_environment(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+        env_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
+        let services = group.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.default_environment = Some(env_name.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_default_environment(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name).ok_or_else(|| {
+            anyhow!(
+                "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+        let services = group.services.as_mut().ok_or_else(|| {
+            anyhow!(
+                "No services configured for group '{}' in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.default_environment.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no default_environment.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.default_environment = None;
         Ok(())
     }
 

@@ -267,6 +267,16 @@ pub enum SetEnvCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum SetSvcCommand {
+    /// Set default_environment on a service
+    DefaultEnvironment {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+        default_environment: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
     /// Set image_repository on a service
     ImageRepository {
         domain_name: String,
@@ -634,6 +644,12 @@ pub enum RmEnvCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum RmSvcCommand {
+    /// Remove default_environment from a service
+    DefaultEnvironment {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+    },
     /// Remove port mapping from a service
     Portmap {
         domain_name: String,

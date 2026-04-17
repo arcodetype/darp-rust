@@ -21,8 +21,9 @@ The first level that defines a setting wins. For example, if a service defines `
 The environment is determined by:
 
 1. The `-e` flag on the command line
-2. The group's `default_environment`
-3. The domain's `default_environment`
+2. The service's `default_environment`
+3. The group's `default_environment`
+4. The domain's `default_environment`
 
 ## Config Structure
 
@@ -106,7 +107,7 @@ Additionally:
 
 | Setting | Where | Description |
 |---|---|---|
-| `default_environment` | Domain, Group | Fallback environment when `-e` isn't passed |
+| `default_environment` | Domain, Group, Service | Fallback environment when `-e` isn't passed |
 | `location` | Domain | Filesystem path to the domain folder |
 
 ## Viewing Resolved Config

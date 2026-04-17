@@ -333,6 +333,77 @@ fn service_context_from_cwd_cli_env_overrides_domain_default() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[test]
+fn service_context_from_cwd_service_default_env_beats_group_and_domain() {
+    let _lock = CWD_LOCK.lock().unwrap();
+    let base = std::env::temp_dir().join("darp_test_svc_ctx_svc_wins");
+    let _ = std::fs::remove_dir_all(&base);
+    let domain_dir = base.join("projects");
+    let service_dir = domain_dir.join("myapp");
+    std::fs::create_dir_all(&service_dir).unwrap();
+
+    let mut config = Config::default();
+    config
+        .add_domain("projects", &domain_dir.to_string_lossy())
+        .unwrap();
+
+    // Register all three envs referenced below.
+    let mut envs = BTreeMap::new();
+    envs.insert("dom-env".to_string(), Environment::default());
+    envs.insert("grp-env".to_string(), Environment::default());
+    envs.insert(
+        "svc-env".to_string(),
+        Environment {
+            serve_command: Some("svc-serve".into()),
+            ..Default::default()
+        },
+    );
+    config.environments = Some(envs);
+
+    // Domain default = dom-env
+    let domain = config
+        .domains
+        .as_mut()
+        .unwrap()
+        .get_mut("projects")
+        .unwrap();
+    domain.default_environment = Some("dom-env".to_string());
+
+    // "." group with default = grp-env, and a service "myapp" with default = svc-env
+    let mut dot_group = Group::default();
+    dot_group.default_environment = Some("grp-env".to_string());
+    let mut services = BTreeMap::new();
+    services.insert(
+        "myapp".to_string(),
+        Service {
+            default_environment: Some("svc-env".into()),
+            ..Default::default()
+        },
+    );
+    dot_group.services = Some(services);
+    let mut groups = BTreeMap::new();
+    groups.insert(".".to_string(), dot_group);
+    domain.groups = Some(groups);
+
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&service_dir).unwrap();
+
+    // No -e flag: svc-env should win over grp-env and dom-env
+    let ctx = config.service_context_from_cwd(None);
+
+    std::env::set_current_dir(&original_dir).unwrap();
+
+    assert!(ctx.is_some());
+    let ctx = ctx.unwrap();
+    assert_eq!(ctx.environment_name.as_deref(), Some("svc-env"));
+    assert_eq!(
+        ctx.environment.unwrap().serve_command.as_deref(),
+        Some("svc-serve")
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 // ---------------------------------------------------------------------------
 // merge_values — array concatenation (the uncovered branch)
 // ---------------------------------------------------------------------------

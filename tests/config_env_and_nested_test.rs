@@ -372,6 +372,23 @@ fn service_serve_command_lifecycle() {
 }
 
 #[test]
+fn service_default_environment_lifecycle() {
+    let mut c = config_with_domain("d", "/tmp/d");
+    c.set_serve_command("go", "air").unwrap(); // create env
+    c.set_service_default_environment("d", "g", "svc", "go")
+        .unwrap();
+
+    let svc = &c.domains.as_ref().unwrap()["d"].groups.as_ref().unwrap()["g"]
+        .services
+        .as_ref()
+        .unwrap()["svc"];
+    assert_eq!(svc.default_environment.as_deref(), Some("go"));
+
+    c.rm_service_default_environment("d", "g", "svc").unwrap();
+    assert!(c.rm_service_default_environment("d", "g", "svc").is_err());
+}
+
+#[test]
 fn service_shell_command_lifecycle() {
     let mut c = config_with_domain("d", "/tmp/d");
     c.set_service_shell_command("d", "g", "svc", "bash")

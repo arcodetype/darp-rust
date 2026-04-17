@@ -145,6 +145,8 @@ darp config set grp serve-command my-domain go 'air'
 # Service level (use -g for non-default group)
 darp config set svc serve-command my-domain my-service 'npm start'
 darp config set svc serve-command -g laravel my-domain admin 'php artisan serve'
+darp config set svc default-environment my-domain my-service go
+darp config set svc default-environment -g laravel my-domain admin 'lara:13'
 # Also: shell-command, image-repository, platform, default-container-image
 ```
 
@@ -199,6 +201,8 @@ darp config rm dom default-environment my-domain
 darp config rm grp default-environment my-domain laravel
 darp config rm svc serve-command my-domain my-service
 darp config rm svc serve-command -g laravel my-domain admin
+darp config rm svc default-environment my-domain my-service
+darp config rm svc default-environment -g laravel my-domain admin
 
 # Collection entries
 darp config rm env portmap go 2345
