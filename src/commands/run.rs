@@ -100,11 +100,16 @@ fn build_container_command(
     let portmap: serde_json::Value =
         config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
 
+    // Portmap entries are either a bare number (legacy) or {"port": N, "type": "..."}.
     let rev_proxy_port = portmap
         .get(&resolved.domain_name)
         .and_then(|d| d.get(&resolved.group_name))
         .and_then(|g| g.get(&resolved.service_name))
-        .and_then(|v| v.as_u64())
+        .and_then(|v| {
+            v.get("port")
+                .and_then(|p| p.as_u64())
+                .or_else(|| v.as_u64())
+        })
         .unwrap_or_else(|| {
             eprintln!(
                 "port not yet assigned to {}, run 'darp deploy'",
@@ -113,7 +118,17 @@ fn build_container_command(
             std::process::exit(1);
         });
 
-    cmd.arg("-p").arg(format!("{}:8000", rev_proxy_port));
+    // Container-internal port convention keyed off connection_type:
+    //   http      -> 8000 (default)
+    //   websocket -> 8001
+    //   tcp       -> 8002
+    let container_port: u16 = match resolved.connection_type.as_deref() {
+        Some("websocket") => 8001,
+        Some("tcp") => 8002,
+        _ => 8000,
+    };
+    cmd.arg("-p")
+        .arg(format!("{}:{}", rev_proxy_port, container_port));
     cmd.arg(image_name);
 
     Ok(cmd)

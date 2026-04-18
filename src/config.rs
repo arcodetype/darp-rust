@@ -67,6 +67,21 @@ pub struct Config {
     pub wsl: Option<bool>,
 }
 
+/// Allowed values for a service's connection_type. Absent/None is treated as "http".
+pub const CONNECTION_TYPE_VALUES: &[&str] = &["http", "websocket", "tcp"];
+
+pub fn validate_connection_type(value: &str) -> Result<()> {
+    if CONNECTION_TYPE_VALUES.contains(&value) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "invalid connection_type '{}' (must be one of: {})",
+            value,
+            CONNECTION_TYPE_VALUES.join(", ")
+        ))
+    }
+}
+
 pub fn resolve_location(location: &str) -> Result<PathBuf> {
     let home = home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
     let resolved = location.replace("{home}", &home.to_string_lossy());
@@ -96,6 +111,8 @@ pub struct Domain {
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -120,6 +137,8 @@ pub struct Group {
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -142,6 +161,8 @@ pub struct Service {
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -162,9 +183,11 @@ pub struct Environment {
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_type: Option<String>,
 }
 
-/// A borrow-based view of the 8 cascadable fields from any config layer.
+/// A borrow-based view of the 9 cascadable fields from any config layer.
 struct CascadeLayer<'a> {
     serve_command: Option<&'a str>,
     shell_command: Option<&'a str>,
@@ -174,6 +197,7 @@ struct CascadeLayer<'a> {
     host_portmappings: Option<&'a BTreeMap<String, String>>,
     variables: Option<&'a BTreeMap<String, String>>,
     volumes: Option<&'a Vec<Volume>>,
+    connection_type: Option<&'a str>,
 }
 
 impl<'a> From<&'a Domain> for CascadeLayer<'a> {
@@ -187,6 +211,7 @@ impl<'a> From<&'a Domain> for CascadeLayer<'a> {
             host_portmappings: d.host_portmappings.as_ref(),
             variables: d.variables.as_ref(),
             volumes: d.volumes.as_ref(),
+            connection_type: d.connection_type.as_deref(),
         }
     }
 }
@@ -202,6 +227,7 @@ impl<'a> From<&'a Group> for CascadeLayer<'a> {
             host_portmappings: g.host_portmappings.as_ref(),
             variables: g.variables.as_ref(),
             volumes: g.volumes.as_ref(),
+            connection_type: g.connection_type.as_deref(),
         }
     }
 }
@@ -217,6 +243,7 @@ impl<'a> From<&'a Service> for CascadeLayer<'a> {
             host_portmappings: s.host_portmappings.as_ref(),
             variables: s.variables.as_ref(),
             volumes: s.volumes.as_ref(),
+            connection_type: s.connection_type.as_deref(),
         }
     }
 }
@@ -232,6 +259,7 @@ impl<'a> From<&'a Environment> for CascadeLayer<'a> {
             host_portmappings: e.host_portmappings.as_ref(),
             variables: e.variables.as_ref(),
             volumes: e.volumes.as_ref(),
+            connection_type: e.connection_type.as_deref(),
         }
     }
 }
@@ -250,6 +278,7 @@ pub struct ResolvedSettings {
     pub host_portmappings: Option<BTreeMap<String, String>>,
     pub variables: Option<BTreeMap<String, String>>,
     pub volumes: Option<Vec<Volume>>,
+    pub connection_type: Option<String>,
 }
 
 impl ResolvedSettings {
@@ -310,6 +339,11 @@ impl ResolvedSettings {
                 .cloned(),
             variables: layers.iter().flatten().find_map(|l| l.variables).cloned(),
             volumes: layers.iter().flatten().find_map(|l| l.volumes).cloned(),
+            connection_type: layers
+                .iter()
+                .flatten()
+                .find_map(|l| l.connection_type)
+                .map(String::from),
         }
     }
 
@@ -556,6 +590,7 @@ impl Config {
                 image_repository: None,
                 platform: None,
                 default_container_image: None,
+                connection_type: None,
             },
         );
 
@@ -2857,6 +2892,206 @@ impl Config {
         }
 
         svc.default_container_image = None;
+        Ok(())
+    }
+
+    // Domain-level connection_type
+
+    pub fn set_domain_connection_type(&mut self, domain_name: &str, value: &str) -> Result<()> {
+        validate_connection_type(value)?;
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        domain.connection_type = Some(value.to_string());
+        Ok(())
+    }
+
+    pub fn rm_domain_connection_type(&mut self, domain_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        if domain.connection_type.is_none() {
+            return Err(anyhow!(
+                "Domain '{}' has no custom connection_type.",
+                domain_name
+            ));
+        }
+
+        domain.connection_type = None;
+        Ok(())
+    }
+
+    // Group-level connection_type
+
+    pub fn set_group_connection_type(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        value: &str,
+    ) -> Result<()> {
+        validate_connection_type(value)?;
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
+
+        group.connection_type = Some(value.to_string());
+        Ok(())
+    }
+
+    pub fn rm_group_connection_type(&mut self, domain_name: &str, group_name: &str) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name).ok_or_else(|| {
+            anyhow!(
+                "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+
+        if group.connection_type.is_none() {
+            return Err(anyhow!(
+                "Group '{}' in domain '{}' has no custom connection_type.",
+                group_name,
+                domain_name
+            ));
+        }
+
+        group.connection_type = None;
+        Ok(())
+    }
+
+    // Service-level connection_type
+
+    pub fn set_service_connection_type(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+        value: &str,
+    ) -> Result<()> {
+        validate_connection_type(value)?;
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain.groups.get_or_insert_with(BTreeMap::new);
+        let group = groups.entry(group_name.to_string()).or_default();
+        let services = group.services.get_or_insert_with(BTreeMap::new);
+        let svc = services
+            .entry(service_name.to_string())
+            .or_insert_with(Service::default);
+
+        svc.connection_type = Some(value.to_string());
+        Ok(())
+    }
+
+    pub fn rm_service_connection_type(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let domains = self
+            .domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?;
+        let domain = domains
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))?;
+
+        let groups = domain
+            .groups
+            .as_mut()
+            .ok_or_else(|| anyhow!("No groups configured for domain {}", domain_name))?;
+        let group = groups.get_mut(group_name).ok_or_else(|| {
+            anyhow!(
+                "group, {}, does not exist in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+        let services = group.services.as_mut().ok_or_else(|| {
+            anyhow!(
+                "No services configured for group '{}' in domain {}",
+                group_name,
+                domain_name
+            )
+        })?;
+        let svc = services
+            .get_mut(service_name)
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+
+        if svc.connection_type.is_none() {
+            return Err(anyhow!(
+                "Service '{}.{}' has no custom connection_type.",
+                domain_name,
+                service_name
+            ));
+        }
+
+        svc.connection_type = None;
+        Ok(())
+    }
+
+    // Environment-level connection_type
+
+    pub fn set_environment_connection_type(&mut self, env_name: &str, value: &str) -> Result<()> {
+        validate_connection_type(value)?;
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        env.connection_type = Some(value.to_string());
+        Ok(())
+    }
+
+    pub fn rm_environment_connection_type(&mut self, env_name: &str) -> Result<()> {
+        let env = self
+            .environments
+            .as_mut()
+            .and_then(|e| e.get_mut(env_name))
+            .ok_or_else(|| anyhow!("Environment '{}' does not exist.", env_name))?;
+
+        if env.connection_type.is_none() {
+            return Err(anyhow!(
+                "Environment '{}' has no custom connection_type.",
+                env_name
+            ));
+        }
+
+        env.connection_type = None;
         Ok(())
     }
 }

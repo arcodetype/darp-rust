@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::config::{self, Config, DarpPaths};
+use crate::config::{self, Config, DarpPaths, Domain};
 use crate::engine::{self, Engine};
 use crate::os::OsIntegration;
 
@@ -13,6 +13,25 @@ pub fn build_container_hosts(gateway_ip: &str, gateway_name: &str, url_lines: &[
     out.push_str(&format!("{gateway_ip}\t{gateway_name}\n"));
     out.push_str(&url_lines.join(""));
     out
+}
+
+/// Resolve connection_type by cascading service → group → domain. Environment-layer
+/// overrides are not applied at deploy time (deploy does not operate within an environment).
+/// Returns None if no layer sets it, in which case callers should treat as "http".
+fn resolve_deploy_connection_type(
+    domain: &Domain,
+    group_name: &str,
+    service_name: &str,
+) -> Option<String> {
+    let group = domain.groups.as_ref().and_then(|g| g.get(group_name));
+    let service = group
+        .and_then(|g| g.services.as_ref())
+        .and_then(|s| s.get(service_name));
+
+    service
+        .and_then(|s| s.connection_type.clone())
+        .or_else(|| group.and_then(|g| g.connection_type.clone()))
+        .or_else(|| domain.connection_type.clone())
 }
 
 pub fn cmd_deploy(
@@ -40,13 +59,18 @@ pub fn cmd_deploy(
 
     let mut port_number = 50100u16;
 
-    // NOTE: single braces now; we are NOT using `format!`, just `.replace()`
+    // HTTP / WebSocket vhost. The Upgrade + Connection headers are harmless for plain HTTP
+    // and allow WebSocket clients (ws://{svc}.{dom}.test) to reach the upstream. The
+    // $connection_upgrade variable is defined in assets/nginx.conf.
     let host_proxy_template = r#"server {
     listen 80;
     server_name {url};
     location / {
         proxy_pass http://{host_gateway}:{port}/;
         proxy_set_header Host $host;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
     }
 }
 "#;
@@ -75,14 +99,24 @@ pub fn cmd_deploy(
                                 domain_map: &mut serde_json::Map<String, serde_json::Value>,
                                 hosts_container_lines: &mut Vec<String>|
          -> anyhow::Result<()> {
+            let connection_type = resolve_deploy_connection_type(domain, group_name, folder_name)
+                .unwrap_or_else(|| "http".to_string());
+
+            // Record port (and type) in portmap.json. run.rs and cmd_urls read this back.
+            let mut entry = serde_json::Map::new();
+            entry.insert(
+                "port".to_string(),
+                serde_json::Value::Number((*port_number).into()),
+            );
+            entry.insert(
+                "type".to_string(),
+                serde_json::Value::String(connection_type.clone()),
+            );
             let group_obj = domain_map
                 .entry(group_name.to_string())
                 .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
             if let Some(group_map) = group_obj.as_object_mut() {
-                group_map.insert(
-                    folder_name.to_string(),
-                    serde_json::Value::Number((*port_number).into()),
-                );
+                group_map.insert(folder_name.to_string(), serde_json::Value::Object(entry));
             }
 
             let url = format!(
@@ -91,18 +125,30 @@ pub fn cmd_deploy(
                 domain = domain_name
             );
 
+            // Every service gets a hosts entry — HTTP/WS clients reach the reverse proxy
+            // on port 80 via this name; TCP clients reach localhost (the hostname is a
+            // loopback alias once urls_in_hosts syncs /etc/hosts).
             hosts_container_lines.push(format!("0.0.0.0   {url}\n"));
 
-            let vhost = host_proxy_template
-                .replace("{url}", &url)
-                .replace("{host_gateway}", host_gateway)
-                .replace("{port}", &port_number.to_string());
+            match connection_type.as_str() {
+                "tcp" => {
+                    // No nginx vhost — nginx can't route plain TCP by hostname. The
+                    // service is reached as {svc}.{dom}.test:{auto_port} with the port
+                    // resolving via the service container's -p {auto_port}:8002 mapping.
+                }
+                _ => {
+                    let vhost = host_proxy_template
+                        .replace("{url}", &url)
+                        .replace("{host_gateway}", host_gateway)
+                        .replace("{port}", &port_number.to_string());
 
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&paths.vhost_container_conf)?
-                .write_all(vhost.as_bytes())?;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&paths.vhost_container_conf)?
+                        .write_all(vhost.as_bytes())?;
+                }
+            }
 
             *port_number += 1;
             Ok(())

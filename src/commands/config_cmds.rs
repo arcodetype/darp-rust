@@ -128,6 +128,20 @@ pub fn cmd_set(
                     )),
                 )?;
             }
+            SetEnvCommand::ConnectionType {
+                environment,
+                connection_type,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.set_environment_connection_type(&environment, &connection_type),
+                    Some(format!(
+                        "Set connection_type for environment '{}' to:\n  {}",
+                        environment, connection_type
+                    )),
+                )?;
+            }
         },
         SetCommand::Svc { cmd } => match cmd {
             SetSvcCommand::DefaultEnvironment {
@@ -275,6 +289,31 @@ pub fn cmd_set(
                     )),
                 )?;
             }
+            SetSvcCommand::ConnectionType {
+                domain_name,
+                group_name,
+                service_name,
+                connection_type,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_service_connection_type(
+                            &domain_name,
+                            &group_name,
+                            &service_name,
+                            &connection_type,
+                        )
+                    },
+                    Some(format!(
+                        "Set connection_type for service '{}.{}' to:\n  {}",
+                        domain_name, service_name, connection_type
+                    )),
+                )?;
+            }
         },
         SetCommand::Dom { cmd } => match cmd {
             SetDomCommand::DefaultEnvironment {
@@ -382,6 +421,24 @@ pub fn cmd_set(
                     Some(format!(
                         "Set default_container_image for domain '{}' to:\n  {}",
                         domain_name, default_container_image
+                    )),
+                )?;
+            }
+            SetDomCommand::ConnectionType {
+                domain_name,
+                connection_type,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_domain_connection_type(&domain_name, &connection_type)
+                    },
+                    Some(format!(
+                        "Set connection_type for domain '{}' to:\n  {}",
+                        domain_name, connection_type
                     )),
                 )?;
             }
@@ -506,6 +563,25 @@ pub fn cmd_set(
                     Some(format!(
                         "Set default_container_image for group '{}' in domain '{}' to:\n  {}",
                         group_name, domain_name, default_container_image
+                    )),
+                )?;
+            }
+            SetGrpCommand::ConnectionType {
+                domain_name,
+                group_name,
+                connection_type,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_group_connection_type(&domain_name, &group_name, &connection_type)
+                    },
+                    Some(format!(
+                        "Set connection_type for group '{}' in domain '{}' to:\n  {}",
+                        group_name, domain_name, connection_type
                     )),
                 )?;
             }
@@ -886,6 +962,14 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     None,
                 )?;
             }
+            RmDomCommand::ConnectionType { domain_name } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_domain_connection_type(&domain_name),
+                    None,
+                )?;
+            }
         },
         RmCommand::Grp { cmd } => match cmd {
             RmGrpCommand::DefaultEnvironment {
@@ -994,6 +1078,17 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     None,
                 )?;
             }
+            RmGrpCommand::ConnectionType {
+                domain_name,
+                group_name,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_group_connection_type(&domain_name, &group_name),
+                    None,
+                )?;
+            }
         },
         RmCommand::Env { cmd } => match cmd {
             RmEnvCommand::Portmap {
@@ -1039,6 +1134,14 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     config,
                     p,
                     |c| c.rm_default_container_image(&environment),
+                    None,
+                )?;
+            }
+            RmEnvCommand::ConnectionType { environment } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_environment_connection_type(&environment),
                     None,
                 )?;
             }
@@ -1173,6 +1276,18 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     None,
                 )?;
             }
+            RmSvcCommand::ConnectionType {
+                domain_name,
+                group_name,
+                service_name,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_service_connection_type(&domain_name, &group_name, &service_name),
+                    None,
+                )?;
+            }
         },
     }
 
@@ -1284,15 +1399,46 @@ pub fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
 
                         let mut entries: Vec<_> = services.iter().collect();
                         entries.sort_by_key(|(k, _)| *k);
-                        for (service_name, port) in entries {
-                            let port = port.as_u64().unwrap_or(0);
-                            println!(
-                                "{}http://{}.{}.test ({})",
-                                indent,
-                                service_name.blue(),
-                                domain_name.green(),
-                                port
-                            );
+                        for (service_name, entry) in entries {
+                            // Portmap entries are either a bare number (legacy) or
+                            // an object {"port": N, "type": "..."}.
+                            let port = entry
+                                .get("port")
+                                .and_then(|p| p.as_u64())
+                                .or_else(|| entry.as_u64())
+                                .unwrap_or(0);
+                            let conn_type =
+                                entry.get("type").and_then(|t| t.as_str()).unwrap_or("http");
+
+                            match conn_type {
+                                "tcp" => {
+                                    println!(
+                                        "{}tcp://{}.{}.test:{}",
+                                        indent,
+                                        service_name.blue(),
+                                        domain_name.green(),
+                                        port
+                                    );
+                                }
+                                "websocket" => {
+                                    println!(
+                                        "{}ws://{}.{}.test ({})",
+                                        indent,
+                                        service_name.blue(),
+                                        domain_name.green(),
+                                        port
+                                    );
+                                }
+                                _ => {
+                                    println!(
+                                        "{}http://{}.{}.test ({})",
+                                        indent,
+                                        service_name.blue(),
+                                        domain_name.green(),
+                                        port
+                                    );
+                                }
+                            }
                         }
                     }
                 }

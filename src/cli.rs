@@ -176,6 +176,16 @@ pub enum SetDomCommand {
         #[arg(short = 'l', long)]
         location: Option<String>,
     },
+    /// Set connection_type (http|websocket|tcp) on a domain. Controls how the darp reverse
+    /// proxy forwards traffic to services under this domain.
+    ConnectionType {
+        domain_name: String,
+        /// One of: http, websocket, tcp
+        connection_type: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -234,6 +244,16 @@ pub enum SetGrpCommand {
         #[arg(short = 'l', long)]
         location: Option<String>,
     },
+    /// Set connection_type (http|websocket|tcp) on a group
+    ConnectionType {
+        domain_name: String,
+        group_name: String,
+        /// One of: http, websocket, tcp
+        connection_type: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -262,6 +282,12 @@ pub enum SetEnvCommand {
     DefaultContainerImage {
         environment: String,
         default_container_image: String,
+    },
+    /// Set connection_type (http|websocket|tcp) on an environment
+    ConnectionType {
+        environment: String,
+        /// One of: http, websocket, tcp
+        connection_type: String,
     },
 }
 
@@ -323,6 +349,20 @@ pub enum SetSvcCommand {
         group_name: String,
         service_name: String,
         default_container_image: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
+    /// Set connection_type (http|websocket|tcp) on a service. 'http' and 'websocket' both
+    /// generate an nginx vhost at {service}.{domain}.test with WebSocket upgrade support;
+    /// they differ only in the URL scheme shown by `darp urls`. 'tcp' skips the nginx vhost
+    /// entirely and exposes the service on localhost:{auto_port} as a raw TCP socket.
+    ConnectionType {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+        /// One of: http, websocket, tcp
+        connection_type: String,
         /// Create the domain at this path if it doesn't exist
         #[arg(short = 'l', long)]
         location: Option<String>,
@@ -560,6 +600,8 @@ pub enum RmDomCommand {
     Platform { domain_name: String },
     /// Remove default_container_image from a domain
     DefaultContainerImage { domain_name: String },
+    /// Remove connection_type override from a domain
+    ConnectionType { domain_name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -613,6 +655,11 @@ pub enum RmGrpCommand {
         domain_name: String,
         group_name: String,
     },
+    /// Remove connection_type override from a group
+    ConnectionType {
+        domain_name: String,
+        group_name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -640,6 +687,8 @@ pub enum RmEnvCommand {
     Platform { environment: String },
     /// Remove default_container_image from an environment
     DefaultContainerImage { environment: String },
+    /// Remove connection_type override from an environment
+    ConnectionType { environment: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -698,6 +747,12 @@ pub enum RmSvcCommand {
     },
     /// Remove default_container_image from a service
     DefaultContainerImage {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+    },
+    /// Remove connection_type override from a service
+    ConnectionType {
         domain_name: String,
         group_name: String,
         service_name: String,
