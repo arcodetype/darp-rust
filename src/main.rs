@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
                 let engine = Engine::new(engine_kind.clone(), &config)?;
                 let os = OsIntegration::new(&paths, &config, &engine_kind);
                 match cmd {
-                    Command::Install => cmd_install(&paths, &mut config.clone(), &os, &engine)?,
+                    Command::Install => cmd_install(&paths, &config, &os, &engine)?,
                     Command::Uninstall => cmd_uninstall(&paths, &mut config.clone(), &os, &engine)?,
                     Command::Deploy => cmd_deploy(&paths, &config, &os, &engine)?,
                     Command::Shell {
@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
 
 fn cmd_install(
     paths: &DarpPaths,
-    config: &mut Config,
+    _config: &Config,
     os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
@@ -121,7 +121,6 @@ fn cmd_install(
         }
     }
 
-    config.save(&paths.config_path)?;
     Ok(())
 }
 
