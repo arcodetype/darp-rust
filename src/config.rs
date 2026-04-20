@@ -1,9 +1,20 @@
 use anyhow::{Result, anyhow};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Deserializer for `*field` override values. The double `Option` distinguishes
+/// "key absent" (outer `None`) from "key present with JSON null" (`Some(None)`).
+/// Pair with `#[serde(default)]` + `rename = "*field"` + `skip_serializing_if = "Option::is_none"`.
+fn deserialize_nullable_override<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
 
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let data = fs::read(path)?;
@@ -97,22 +108,85 @@ pub struct Domain {
     pub default_environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*host_portmappings",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub host_portmappings_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*variables",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub variables_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*volumes",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub volumes_override: Option<Option<Vec<Volume>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*serve_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub serve_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*shell_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub shell_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*image_repository",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub image_repository_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*platform",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub platform_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*default_container_image",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub default_container_image_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*connection_type",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub connection_type_override: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -123,22 +197,85 @@ pub struct Group {
     pub default_environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*host_portmappings",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub host_portmappings_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*variables",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub variables_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*volumes",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub volumes_override: Option<Option<Vec<Volume>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*serve_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub serve_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*shell_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub shell_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*image_repository",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub image_repository_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*platform",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub platform_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*default_container_image",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub default_container_image_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*connection_type",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub connection_type_override: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -147,71 +284,273 @@ pub struct Service {
     pub default_environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*host_portmappings",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub host_portmappings_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*variables",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub variables_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*volumes",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub volumes_override: Option<Option<Vec<Volume>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*serve_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub serve_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*shell_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub shell_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*image_repository",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub image_repository_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*platform",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub platform_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*default_container_image",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub default_container_image_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*connection_type",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub connection_type_override: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Environment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*volumes",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub volumes_override: Option<Option<Vec<Volume>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serve_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*serve_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub serve_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*shell_command",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub shell_command_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_repository: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*image_repository",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub image_repository_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_portmappings: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*host_portmappings",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub host_portmappings_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*variables",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub variables_override: Option<Option<BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*platform",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub platform_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_container_image: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*default_container_image",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub default_container_image_override: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*connection_type",
+        deserialize_with = "deserialize_nullable_override"
+    )]
+    pub connection_type_override: Option<Option<String>>,
+}
+
+/// Declaration state of a single field at a single layer.
+/// - `Absent`: neither `field` nor `*field` was declared at this layer.
+/// - `Set`: plain `field` with a non-null value.
+/// - `OverrideSet`: `*field` with a non-null value — resets the parent chain.
+/// - `OverrideNull`: `*field: null` — explicit "no value, don't inherit from parents".
+enum FieldDecl<T> {
+    Absent,
+    Set(T),
+    OverrideSet(T),
+    OverrideNull,
+}
+
+fn decl_scalar<'a>(
+    regular: &'a Option<String>,
+    override_: &'a Option<Option<String>>,
+) -> FieldDecl<&'a str> {
+    match override_ {
+        Some(Some(v)) => FieldDecl::OverrideSet(v.as_str()),
+        Some(None) => FieldDecl::OverrideNull,
+        None => match regular {
+            Some(v) => FieldDecl::Set(v.as_str()),
+            None => FieldDecl::Absent,
+        },
+    }
+}
+
+fn decl_ref<'a, T>(regular: &'a Option<T>, override_: &'a Option<Option<T>>) -> FieldDecl<&'a T> {
+    match override_ {
+        Some(Some(v)) => FieldDecl::OverrideSet(v),
+        Some(None) => FieldDecl::OverrideNull,
+        None => match regular {
+            Some(v) => FieldDecl::Set(v),
+            None => FieldDecl::Absent,
+        },
+    }
+}
+
+fn merge_scalar(acc: &mut Option<String>, decl: &FieldDecl<&str>) {
+    match decl {
+        FieldDecl::Absent => {}
+        FieldDecl::Set(v) | FieldDecl::OverrideSet(v) => *acc = Some((*v).to_string()),
+        FieldDecl::OverrideNull => *acc = None,
+    }
+}
+
+fn merge_map(
+    acc: &mut Option<BTreeMap<String, String>>,
+    decl: &FieldDecl<&BTreeMap<String, String>>,
+) {
+    match decl {
+        FieldDecl::Absent => {}
+        FieldDecl::Set(m) => {
+            let a = acc.get_or_insert_with(BTreeMap::new);
+            for (k, v) in m.iter() {
+                a.insert(k.clone(), v.clone());
+            }
+        }
+        FieldDecl::OverrideSet(m) => *acc = Some((*m).clone()),
+        FieldDecl::OverrideNull => *acc = None,
+    }
+}
+
+fn merge_vec<T: Clone>(acc: &mut Option<Vec<T>>, decl: &FieldDecl<&Vec<T>>) {
+    match decl {
+        FieldDecl::Absent => {}
+        FieldDecl::Set(v) => acc
+            .get_or_insert_with(Vec::new)
+            .extend((*v).iter().cloned()),
+        FieldDecl::OverrideSet(v) => *acc = Some((*v).clone()),
+        FieldDecl::OverrideNull => *acc = None,
+    }
 }
 
 /// A borrow-based view of the 9 cascadable fields from any config layer.
 struct CascadeLayer<'a> {
-    serve_command: Option<&'a str>,
-    shell_command: Option<&'a str>,
-    image_repository: Option<&'a str>,
-    platform: Option<&'a str>,
-    default_container_image: Option<&'a str>,
-    host_portmappings: Option<&'a BTreeMap<String, String>>,
-    variables: Option<&'a BTreeMap<String, String>>,
-    volumes: Option<&'a Vec<Volume>>,
-    connection_type: Option<&'a str>,
+    serve_command: FieldDecl<&'a str>,
+    shell_command: FieldDecl<&'a str>,
+    image_repository: FieldDecl<&'a str>,
+    platform: FieldDecl<&'a str>,
+    default_container_image: FieldDecl<&'a str>,
+    host_portmappings: FieldDecl<&'a BTreeMap<String, String>>,
+    variables: FieldDecl<&'a BTreeMap<String, String>>,
+    volumes: FieldDecl<&'a Vec<Volume>>,
+    connection_type: FieldDecl<&'a str>,
 }
 
 impl<'a> From<&'a Domain> for CascadeLayer<'a> {
     fn from(d: &'a Domain) -> Self {
         Self {
-            serve_command: d.serve_command.as_deref(),
-            shell_command: d.shell_command.as_deref(),
-            image_repository: d.image_repository.as_deref(),
-            platform: d.platform.as_deref(),
-            default_container_image: d.default_container_image.as_deref(),
-            host_portmappings: d.host_portmappings.as_ref(),
-            variables: d.variables.as_ref(),
-            volumes: d.volumes.as_ref(),
-            connection_type: d.connection_type.as_deref(),
+            serve_command: decl_scalar(&d.serve_command, &d.serve_command_override),
+            shell_command: decl_scalar(&d.shell_command, &d.shell_command_override),
+            image_repository: decl_scalar(&d.image_repository, &d.image_repository_override),
+            platform: decl_scalar(&d.platform, &d.platform_override),
+            default_container_image: decl_scalar(
+                &d.default_container_image,
+                &d.default_container_image_override,
+            ),
+            host_portmappings: decl_ref(&d.host_portmappings, &d.host_portmappings_override),
+            variables: decl_ref(&d.variables, &d.variables_override),
+            volumes: decl_ref(&d.volumes, &d.volumes_override),
+            connection_type: decl_scalar(&d.connection_type, &d.connection_type_override),
         }
     }
 }
@@ -219,15 +558,18 @@ impl<'a> From<&'a Domain> for CascadeLayer<'a> {
 impl<'a> From<&'a Group> for CascadeLayer<'a> {
     fn from(g: &'a Group) -> Self {
         Self {
-            serve_command: g.serve_command.as_deref(),
-            shell_command: g.shell_command.as_deref(),
-            image_repository: g.image_repository.as_deref(),
-            platform: g.platform.as_deref(),
-            default_container_image: g.default_container_image.as_deref(),
-            host_portmappings: g.host_portmappings.as_ref(),
-            variables: g.variables.as_ref(),
-            volumes: g.volumes.as_ref(),
-            connection_type: g.connection_type.as_deref(),
+            serve_command: decl_scalar(&g.serve_command, &g.serve_command_override),
+            shell_command: decl_scalar(&g.shell_command, &g.shell_command_override),
+            image_repository: decl_scalar(&g.image_repository, &g.image_repository_override),
+            platform: decl_scalar(&g.platform, &g.platform_override),
+            default_container_image: decl_scalar(
+                &g.default_container_image,
+                &g.default_container_image_override,
+            ),
+            host_portmappings: decl_ref(&g.host_portmappings, &g.host_portmappings_override),
+            variables: decl_ref(&g.variables, &g.variables_override),
+            volumes: decl_ref(&g.volumes, &g.volumes_override),
+            connection_type: decl_scalar(&g.connection_type, &g.connection_type_override),
         }
     }
 }
@@ -235,15 +577,18 @@ impl<'a> From<&'a Group> for CascadeLayer<'a> {
 impl<'a> From<&'a Service> for CascadeLayer<'a> {
     fn from(s: &'a Service) -> Self {
         Self {
-            serve_command: s.serve_command.as_deref(),
-            shell_command: s.shell_command.as_deref(),
-            image_repository: s.image_repository.as_deref(),
-            platform: s.platform.as_deref(),
-            default_container_image: s.default_container_image.as_deref(),
-            host_portmappings: s.host_portmappings.as_ref(),
-            variables: s.variables.as_ref(),
-            volumes: s.volumes.as_ref(),
-            connection_type: s.connection_type.as_deref(),
+            serve_command: decl_scalar(&s.serve_command, &s.serve_command_override),
+            shell_command: decl_scalar(&s.shell_command, &s.shell_command_override),
+            image_repository: decl_scalar(&s.image_repository, &s.image_repository_override),
+            platform: decl_scalar(&s.platform, &s.platform_override),
+            default_container_image: decl_scalar(
+                &s.default_container_image,
+                &s.default_container_image_override,
+            ),
+            host_portmappings: decl_ref(&s.host_portmappings, &s.host_portmappings_override),
+            variables: decl_ref(&s.variables, &s.variables_override),
+            volumes: decl_ref(&s.volumes, &s.volumes_override),
+            connection_type: decl_scalar(&s.connection_type, &s.connection_type_override),
         }
     }
 }
@@ -251,15 +596,18 @@ impl<'a> From<&'a Service> for CascadeLayer<'a> {
 impl<'a> From<&'a Environment> for CascadeLayer<'a> {
     fn from(e: &'a Environment) -> Self {
         Self {
-            serve_command: e.serve_command.as_deref(),
-            shell_command: e.shell_command.as_deref(),
-            image_repository: e.image_repository.as_deref(),
-            platform: e.platform.as_deref(),
-            default_container_image: e.default_container_image.as_deref(),
-            host_portmappings: e.host_portmappings.as_ref(),
-            variables: e.variables.as_ref(),
-            volumes: e.volumes.as_ref(),
-            connection_type: e.connection_type.as_deref(),
+            serve_command: decl_scalar(&e.serve_command, &e.serve_command_override),
+            shell_command: decl_scalar(&e.shell_command, &e.shell_command_override),
+            image_repository: decl_scalar(&e.image_repository, &e.image_repository_override),
+            platform: decl_scalar(&e.platform, &e.platform_override),
+            default_container_image: decl_scalar(
+                &e.default_container_image,
+                &e.default_container_image_override,
+            ),
+            host_portmappings: decl_ref(&e.host_portmappings, &e.host_portmappings_override),
+            variables: decl_ref(&e.variables, &e.variables_override),
+            volumes: decl_ref(&e.volumes, &e.volumes_override),
+            connection_type: decl_scalar(&e.connection_type, &e.connection_type_override),
         }
     }
 }
@@ -282,8 +630,14 @@ pub struct ResolvedSettings {
 }
 
 impl ResolvedSettings {
-    /// Resolve cascading settings from service > group > domain > environment.
-    /// The first layer to provide a value for each field wins.
+    /// Resolve cascading settings across `environment → domain → group → service`
+    /// (least-specific to most-specific).
+    ///
+    /// For each field: walk layers in that order and accumulate. `Vec` fields append,
+    /// `BTreeMap` fields merge (later/more-specific keys win), scalar fields overwrite.
+    /// A `*field` override at any layer resets the accumulator before applying that
+    /// layer's value (or clears it entirely if `*field: null`). Children walked after
+    /// can still layer on top of an override.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         domain_name: String,
@@ -296,54 +650,48 @@ impl ResolvedSettings {
         environment: Option<&Environment>,
     ) -> Self {
         let layers: [Option<CascadeLayer>; 4] = [
-            service.map(CascadeLayer::from),
-            group.map(CascadeLayer::from),
-            Some(CascadeLayer::from(domain)),
             environment.map(CascadeLayer::from),
+            Some(CascadeLayer::from(domain)),
+            group.map(CascadeLayer::from),
+            service.map(CascadeLayer::from),
         ];
+
+        let mut serve_command = None;
+        let mut shell_command = None;
+        let mut image_repository = None;
+        let mut platform = None;
+        let mut default_container_image = None;
+        let mut connection_type = None;
+        let mut host_portmappings = None;
+        let mut variables = None;
+        let mut volumes = None;
+
+        for layer in layers.iter().flatten() {
+            merge_scalar(&mut serve_command, &layer.serve_command);
+            merge_scalar(&mut shell_command, &layer.shell_command);
+            merge_scalar(&mut image_repository, &layer.image_repository);
+            merge_scalar(&mut platform, &layer.platform);
+            merge_scalar(&mut default_container_image, &layer.default_container_image);
+            merge_scalar(&mut connection_type, &layer.connection_type);
+            merge_map(&mut host_portmappings, &layer.host_portmappings);
+            merge_map(&mut variables, &layer.variables);
+            merge_vec(&mut volumes, &layer.volumes);
+        }
 
         Self {
             domain_name,
             group_name,
             service_name,
             environment_name,
-            serve_command: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.serve_command)
-                .map(String::from),
-            shell_command: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.shell_command)
-                .map(String::from),
-            image_repository: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.image_repository)
-                .map(String::from),
-            platform: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.platform)
-                .map(String::from),
-            default_container_image: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.default_container_image)
-                .map(String::from),
-            host_portmappings: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.host_portmappings)
-                .cloned(),
-            variables: layers.iter().flatten().find_map(|l| l.variables).cloned(),
-            volumes: layers.iter().flatten().find_map(|l| l.volumes).cloned(),
-            connection_type: layers
-                .iter()
-                .flatten()
-                .find_map(|l| l.connection_type)
-                .map(String::from),
+            serve_command,
+            shell_command,
+            image_repository,
+            platform,
+            default_container_image,
+            host_portmappings,
+            variables,
+            volumes,
+            connection_type,
         }
     }
 
@@ -369,7 +717,8 @@ pub struct Volume {
 
 fn strip_nulls(value: &mut serde_json::Value) {
     if let Some(obj) = value.as_object_mut() {
-        obj.retain(|_, v| !v.is_null());
+        // Preserve `*`-prefixed keys with null values — they carry "override with null" meaning.
+        obj.retain(|k, v| !v.is_null() || k.starts_with('*'));
         for v in obj.values_mut() {
             strip_nulls(v);
         }
@@ -405,7 +754,8 @@ impl Config {
         maybe_migrate(path)?;
 
         let data = fs::read(path)?;
-        let cfg = serde_json::from_slice(&data).unwrap_or_default();
+        let cfg: Config = serde_json::from_slice(&data).unwrap_or_default();
+        Self::validate_no_double_declarations(&cfg)?;
         Ok(cfg)
     }
 
@@ -580,17 +930,7 @@ impl Config {
             name.to_string(),
             Domain {
                 location: location.to_string(),
-                groups: None,
-                default_environment: None,
-                host_portmappings: None,
-                variables: None,
-                volumes: None,
-                serve_command: None,
-                shell_command: None,
-                image_repository: None,
-                platform: None,
-                default_container_image: None,
-                connection_type: None,
+                ..Default::default()
             },
         );
 
@@ -3223,6 +3563,109 @@ pub fn merge_values(base: serde_json::Value, overlay: serde_json::Value) -> serd
 }
 
 impl Config {
+    /// Ensure no layer declares both `field` and `*field` — that's ambiguous.
+    fn validate_no_double_declarations(config: &Config) -> Result<()> {
+        fn check(has_regular: bool, has_override: bool, location: &str, field: &str) -> Result<()> {
+            if has_regular && has_override {
+                return Err(anyhow!(
+                    "Config error at {location}: both '{field}' and '*{field}' are set. Use one or the other, not both.",
+                ));
+            }
+            Ok(())
+        }
+
+        macro_rules! check_all {
+            ($layer:expr, $loc:expr) => {{
+                let l = $layer;
+                let loc = $loc;
+                check(
+                    l.serve_command.is_some(),
+                    l.serve_command_override.is_some(),
+                    &loc,
+                    "serve_command",
+                )?;
+                check(
+                    l.shell_command.is_some(),
+                    l.shell_command_override.is_some(),
+                    &loc,
+                    "shell_command",
+                )?;
+                check(
+                    l.image_repository.is_some(),
+                    l.image_repository_override.is_some(),
+                    &loc,
+                    "image_repository",
+                )?;
+                check(
+                    l.platform.is_some(),
+                    l.platform_override.is_some(),
+                    &loc,
+                    "platform",
+                )?;
+                check(
+                    l.default_container_image.is_some(),
+                    l.default_container_image_override.is_some(),
+                    &loc,
+                    "default_container_image",
+                )?;
+                check(
+                    l.connection_type.is_some(),
+                    l.connection_type_override.is_some(),
+                    &loc,
+                    "connection_type",
+                )?;
+                check(
+                    l.host_portmappings.is_some(),
+                    l.host_portmappings_override.is_some(),
+                    &loc,
+                    "host_portmappings",
+                )?;
+                check(
+                    l.variables.is_some(),
+                    l.variables_override.is_some(),
+                    &loc,
+                    "variables",
+                )?;
+                check(
+                    l.volumes.is_some(),
+                    l.volumes_override.is_some(),
+                    &loc,
+                    "volumes",
+                )?;
+            }};
+        }
+
+        if let Some(domains) = &config.domains {
+            for (dname, d) in domains {
+                check_all!(d, format!("domain '{}'", dname));
+                if let Some(groups) = &d.groups {
+                    for (gname, g) in groups {
+                        check_all!(g, format!("domain '{}' group '{}'", dname, gname));
+                        if let Some(services) = &g.services {
+                            for (sname, s) in services {
+                                check_all!(
+                                    s,
+                                    format!(
+                                        "domain '{}' group '{}' service '{}'",
+                                        dname, gname, sname
+                                    )
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(envs) = &config.environments {
+            for (ename, e) in envs {
+                check_all!(e, format!("environment '{}'", ename));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn load_merged(leaf_path: &Path) -> Result<Self> {
         // 1. Load and migrate the leaf config
         if !leaf_path.exists() {
@@ -3300,6 +3743,7 @@ impl Config {
         }
 
         let cfg: Config = serde_json::from_value(merged)?;
+        Self::validate_no_double_declarations(&cfg)?;
         Ok(cfg)
     }
 }

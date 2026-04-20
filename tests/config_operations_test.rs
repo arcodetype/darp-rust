@@ -467,3 +467,135 @@ fn save_and_load_round_trip() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// `*field` override parsing and validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn load_merged_parses_asterisk_keys() {
+    let dir = std::env::temp_dir().join("darp_test_asterisk_parse");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("config.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "domains": {
+                "proj": {
+                    "location": "/tmp/proj",
+                    "*volumes": [{"host": "/a", "container": "/a"}],
+                    "*serve_command": null
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let cfg = Config::load_merged(&path).unwrap();
+    let d = cfg.domains.as_ref().unwrap().get("proj").unwrap();
+
+    // Asterisk volumes parsed into volumes_override = Some(Some(vec))
+    let vol_over = d.volumes_override.as_ref().expect("volumes_override set");
+    let vols = vol_over
+        .as_ref()
+        .expect("volumes_override is Some(Some(..))");
+    assert_eq!(vols.len(), 1);
+    assert_eq!(vols[0].host, "/a");
+
+    // Asterisk-null serve_command parsed into Some(None)
+    let sc_over = d
+        .serve_command_override
+        .as_ref()
+        .expect("serve_command_override set");
+    assert!(
+        sc_over.is_none(),
+        "expected Some(None) for *serve_command: null"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn config_with_both_field_and_asterisk_field_errors() {
+    let dir = std::env::temp_dir().join("darp_test_asterisk_double");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("config.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "domains": {
+                "proj": {
+                    "location": "/tmp/proj",
+                    "volumes": [{"host": "/a", "container": "/a"}],
+                    "*volumes": [{"host": "/b", "container": "/b"}]
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let result = Config::load_merged(&path);
+    assert!(result.is_err(), "expected error on double declaration");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("volumes"), "error should name field: {}", err);
+    assert!(err.contains("proj"), "error should name location: {}", err);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn save_roundtrip_preserves_asterisk_fields() {
+    let dir = std::env::temp_dir().join("darp_test_asterisk_roundtrip");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.json");
+
+    // Write an initial config containing both forms of override.
+    std::fs::write(
+        &path,
+        r#"{
+            "domains": {
+                "proj": {
+                    "location": "/tmp/proj",
+                    "*volumes": [{"host": "/x", "container": "/x"}],
+                    "*serve_command": null
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    // Load → save → load, ensure both override forms survive.
+    let loaded = Config::load_merged(&path).unwrap();
+    let resave_path = dir.join("resaved.json");
+    loaded.save(&resave_path).unwrap();
+
+    let raw = std::fs::read_to_string(&resave_path).unwrap();
+    assert!(
+        raw.contains("\"*volumes\""),
+        "*volumes key should be preserved: {}",
+        raw
+    );
+    assert!(
+        raw.contains("\"*serve_command\""),
+        "*serve_command key should be preserved: {}",
+        raw
+    );
+    assert!(
+        raw.contains("\"*serve_command\": null"),
+        "*serve_command null value should be preserved: {}",
+        raw
+    );
+
+    let reloaded = Config::load_merged(&resave_path).unwrap();
+    let d = reloaded.domains.as_ref().unwrap().get("proj").unwrap();
+    assert!(d.volumes_override.is_some());
+    assert!(d.serve_command_override.is_some());
+    assert!(d.serve_command_override.as_ref().unwrap().is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
