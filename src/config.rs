@@ -904,15 +904,22 @@ impl Config {
         }
     }
 
-    pub fn resolve_host_path(&self, template: &str, current_dir: &Path) -> Result<PathBuf> {
+    pub fn resolve_host_path(
+        &self,
+        template: &str,
+        current_dir: &Path,
+        domain_location: &Path,
+    ) -> Result<PathBuf> {
         const PSEUDO_PWD_TOKEN: &str = "{pwd}";
         const PSEUDO_HOME_TOKEN: &str = "{home}";
+        const PSEUDO_DOMAIN_TOKEN: &str = "{domain}";
 
         let home = home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
 
         let s = template
             .replace(PSEUDO_PWD_TOKEN, &current_dir.to_string_lossy())
-            .replace(PSEUDO_HOME_TOKEN, &home.to_string_lossy());
+            .replace(PSEUDO_HOME_TOKEN, &home.to_string_lossy())
+            .replace(PSEUDO_DOMAIN_TOKEN, &domain_location.to_string_lossy());
 
         Ok(PathBuf::from(s))
     }

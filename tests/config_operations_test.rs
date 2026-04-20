@@ -56,7 +56,10 @@ fn parse_bool_rejects_invalid() {
 fn resolve_host_path_pwd_token() {
     let c = Config::default();
     let current = PathBuf::from("/my/project");
-    let result = c.resolve_host_path("{pwd}/data", &current).unwrap();
+    let domain = PathBuf::from("/my");
+    let result = c
+        .resolve_host_path("{pwd}/data", &current, &domain)
+        .unwrap();
     assert_eq!(result, PathBuf::from("/my/project/data"));
 }
 
@@ -64,7 +67,10 @@ fn resolve_host_path_pwd_token() {
 fn resolve_host_path_home_token() {
     let c = Config::default();
     let current = PathBuf::from("/any");
-    let result = c.resolve_host_path("{home}/.cache", &current).unwrap();
+    let domain = PathBuf::from("/any");
+    let result = c
+        .resolve_host_path("{home}/.cache", &current, &domain)
+        .unwrap();
     // Should contain the actual home dir, not the literal token
     let result_str = result.to_string_lossy();
     assert!(!result_str.contains("{home}"));
@@ -75,8 +81,22 @@ fn resolve_host_path_home_token() {
 fn resolve_host_path_no_tokens() {
     let c = Config::default();
     let current = PathBuf::from("/any");
-    let result = c.resolve_host_path("/absolute/path", &current).unwrap();
+    let domain = PathBuf::from("/any");
+    let result = c
+        .resolve_host_path("/absolute/path", &current, &domain)
+        .unwrap();
     assert_eq!(result, PathBuf::from("/absolute/path"));
+}
+
+#[test]
+fn resolve_host_path_domain_token() {
+    let c = Config::default();
+    let current = PathBuf::from("/my/project/svc");
+    let domain = PathBuf::from("/my/project");
+    let result = c
+        .resolve_host_path("{domain}/shared", &current, &domain)
+        .unwrap();
+    assert_eq!(result, PathBuf::from("/my/project/shared"));
 }
 
 // ---------------------------------------------------------------------------

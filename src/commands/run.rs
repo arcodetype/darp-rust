@@ -65,8 +65,9 @@ fn build_container_command(
         ));
 
     if let Some(vols) = &resolved.volumes {
+        let domain_loc = config::resolve_location(&ctx.domain.location)?;
         for v in vols {
-            let host = config.resolve_host_path(&v.host, &ctx.current_dir)?;
+            let host = config.resolve_host_path(&v.host, &ctx.current_dir, &domain_loc)?;
             if !host.exists() {
                 eprintln!("Volume {} does not appear to exist.", v.host);
                 std::process::exit(1);
