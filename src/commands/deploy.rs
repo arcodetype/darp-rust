@@ -37,12 +37,16 @@ fn resolve_deploy_connection_type(
 pub fn cmd_deploy(
     paths: &DarpPaths,
     config: &Config,
-    _os: &OsIntegration,
+    os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
     engine.require_ready()?;
 
     println!("Deploying Container Development\n");
+
+    // Refresh the embedded nginx.conf on every deploy so fixes to assets/nginx.conf
+    // reach the reverse-proxy without a separate `darp install`.
+    os.copy_nginx_conf()?;
 
     let host_gateway = engine.host_gateway();
 

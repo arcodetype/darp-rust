@@ -332,7 +332,12 @@ impl Engine {
             .arg("80:80")
             .arg("-v")
             .arg(format!(
-                "{}:/etc/nginx/conf.d/vhost_container.conf",
+                "{}:/etc/nginx/nginx.conf",
+                paths.nginx_conf_path.display()
+            ))
+            .arg("-v")
+            .arg(format!(
+                "{}:/etc/nginx/http.d/vhost_container.conf",
                 paths.vhost_container_conf.display()
             ));
 
@@ -341,7 +346,7 @@ impl Engine {
                 .arg("host.docker.internal:host-gateway");
         }
 
-        cmd.arg("nginx")
+        cmd.arg("nginx:alpine")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
