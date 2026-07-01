@@ -15,6 +15,67 @@ pub fn build_container_hosts(gateway_ip: &str, gateway_name: &str, url_lines: &[
     out
 }
 
+/// Collect every host port declared in a `host_portmappings` anywhere in the config
+/// (domain/group/service/environment). Debug-port assignment skips these so a debug
+/// listener never clashes with a port darp publishes via `-p`. Templated keys (e.g.
+/// `{debug_port}`) don't parse as numbers and are ignored.
+fn collect_host_portmap_ports(config: &Config) -> std::collections::HashSet<u16> {
+    let mut set = std::collections::HashSet::new();
+    let mut add = |pm: &Option<std::collections::BTreeMap<String, String>>| {
+        if let Some(pm) = pm {
+            for host in pm.keys() {
+                if let Ok(p) = host.parse::<u16>() {
+                    set.insert(p);
+                }
+            }
+        }
+    };
+    if let Some(domains) = &config.domains {
+        for domain in domains.values() {
+            add(&domain.host_portmappings);
+            if let Some(groups) = &domain.groups {
+                for group in groups.values() {
+                    add(&group.host_portmappings);
+                    if let Some(services) = &group.services {
+                        for svc in services.values() {
+                            add(&svc.host_portmappings);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(envs) = &config.environments {
+        for env in envs.values() {
+            add(&env.host_portmappings);
+        }
+    }
+    set
+}
+
+/// Collect every already-assigned `debug_port` from a previously-written portmap so
+/// re-deploys keep each service's port stable (assignment order from `read_dir` is
+/// otherwise unstable). Removed services free their port on the next deploy.
+fn collect_debug_ports(portmap: &serde_json::Value) -> std::collections::HashSet<u16> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(domains) = portmap.as_object() {
+        for group_obj in domains.values() {
+            if let Some(groups) = group_obj.as_object() {
+                for svc_obj in groups.values() {
+                    if let Some(services) = svc_obj.as_object() {
+                        for entry in services.values() {
+                            if let Some(p) = entry.get("debug_port").and_then(|v| v.as_u64()) {
+                                set.insert(p as u16);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
 /// Resolve connection_type by cascading service → group → domain. Environment-layer
 /// overrides are not applied at deploy time (deploy does not operate within an environment).
 /// Returns None if no layer sets it, in which case callers should treat as "http".
@@ -63,6 +124,24 @@ pub fn cmd_deploy(
 
     let mut port_number = 50100u16;
 
+    // Assign a stable, unique debug port per service.
+    let old_portmap: serde_json::Value =
+        config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
+    let debug_base = config.debug_port_base.unwrap_or(config::DEBUG_PORT_BASE);
+    // Ports never handed out: well-known services + any host port darp itself publishes.
+    let mut skip_debug_ports = config::well_known_skip_ports();
+    skip_debug_ports.extend(collect_host_portmap_ports(config));
+    // Seed "reserved" only with persisted ports we'll actually keep (in-range and not
+    // skipped) so a kept port isn't reassigned to another service. Persisted ports below
+    // the current base (e.g. an old 9003+ range) or now in the skip-list are dropped here
+    // and get reassigned into range — auto-migrating on the next deploy.
+    let mut reserved_debug_ports: std::collections::HashSet<u16> =
+        collect_debug_ports(&old_portmap)
+            .into_iter()
+            .filter(|p| *p >= debug_base && !skip_debug_ports.contains(p))
+            .collect();
+    let mut next_debug_port = debug_base;
+
     // HTTP / WebSocket vhost. The Upgrade + Connection headers are harmless for plain HTTP
     // and allow WebSocket clients (ws://{svc}.{dom}.test) to reach the upstream. The
     // $connection_upgrade variable is defined in assets/nginx.conf.
@@ -100,11 +179,23 @@ pub fn cmd_deploy(
         let register_service = |folder_name: &str,
                                 group_name: &str,
                                 port_number: &mut u16,
+                                next_debug_port: &mut u16,
+                                reserved_debug_ports: &mut std::collections::HashSet<u16>,
                                 domain_map: &mut serde_json::Map<String, serde_json::Value>,
                                 hosts_container_lines: &mut Vec<String>|
          -> anyhow::Result<()> {
             let connection_type = resolve_deploy_connection_type(domain, group_name, folder_name)
                 .unwrap_or_else(|| "http".to_string());
+
+            // Reuse this service's previously-assigned debug port when still valid,
+            // else assign the next free one (skipping reserved + well-known ports).
+            let debug_port = config::choose_debug_port(
+                config::portmap_debug_port(&old_portmap, domain_name, group_name, folder_name),
+                debug_base,
+                &skip_debug_ports,
+                reserved_debug_ports,
+                next_debug_port,
+            );
 
             // Record port (and type) in portmap.json. run.rs and cmd_urls read this back.
             let mut entry = serde_json::Map::new();
@@ -115,6 +206,10 @@ pub fn cmd_deploy(
             entry.insert(
                 "type".to_string(),
                 serde_json::Value::String(connection_type.clone()),
+            );
+            entry.insert(
+                "debug_port".to_string(),
+                serde_json::Value::Number(debug_port.into()),
             );
             let group_obj = domain_map
                 .entry(group_name.to_string())
@@ -170,6 +265,8 @@ pub fn cmd_deploy(
                                 &folder_name,
                                 ".",
                                 &mut port_number,
+                                &mut next_debug_port,
+                                &mut reserved_debug_ports,
                                 &mut domain_map,
                                 &mut hosts_container_lines,
                             )?;
@@ -191,6 +288,8 @@ pub fn cmd_deploy(
                             &folder_name,
                             group_name,
                             &mut port_number,
+                            &mut next_debug_port,
+                            &mut reserved_debug_ports,
                             &mut domain_map,
                             &mut hosts_container_lines,
                         )?;
@@ -216,6 +315,35 @@ pub fn cmd_deploy(
         build_container_hosts(&gateway_ip, engine.host_gateway(), &hosts_container_lines);
     std::fs::write(&paths.hosts_container_path, hosts_content)?;
     std::fs::write(&paths.portmap_path, serde_json::to_vec_pretty(&portmap)?)?;
+
+    // Report assigned debug ports so each project's .vscode/launch.json "port" can be
+    // set (once — ports are persisted). Also available anytime via `darp urls`.
+    let mut debug_lines: Vec<(String, u16)> = Vec::new();
+    for (domain_name, groups) in portmap.iter() {
+        if let Some(groups) = groups.as_object() {
+            for (group_name, services) in groups {
+                if let Some(services) = services.as_object() {
+                    for (service_name, entry) in services {
+                        if let Some(p) = entry.get("debug_port").and_then(|v| v.as_u64()) {
+                            let label = if group_name == "." {
+                                format!("{}.{}", service_name, domain_name)
+                            } else {
+                                format!("{}.{}.{}", service_name, group_name, domain_name)
+                            };
+                            debug_lines.push((label, p as u16));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !debug_lines.is_empty() {
+        debug_lines.sort();
+        println!("\nDebug ports (set as \"port\" in each project's .vscode/launch.json):");
+        for (label, port) in debug_lines {
+            println!("  {label} → {port}");
+        }
+    }
 
     // Restart reverse proxy and stop darp_* containers
     engine.restart_reverse_proxy(paths)?;

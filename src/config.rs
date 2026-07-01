@@ -21,6 +21,125 @@ pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     Ok(serde_json::from_slice(&data)?)
 }
 
+/// Values available for `{token}` interpolation in `variables`, `serve_command`,
+/// and `host_portmappings`. This is language-agnostic: darp only assigns/exposes
+/// the values, and the config author wires any debugger-specific string (e.g.
+/// `XDEBUG_CONFIG=... client_port={debug_port}`) in team_config.json.
+///
+/// Note: `{domain}` here is the domain *name* (unlike `resolve_host_path`, where
+/// `{domain}` is the domain location path — those apply to different config fields).
+pub struct TokenCtx<'a> {
+    pub domain: &'a str,
+    pub group: &'a str,
+    pub service: &'a str,
+    /// Stable, unique-per-service debug port assigned by `darp deploy`.
+    pub debug_port: u16,
+    /// Reverse-proxy port for the service, if assigned.
+    pub proxy_port: Option<u16>,
+}
+
+/// Replace `{debug_port}` (and, for convenience, `{service}`/`{domain}`/`{group}`/
+/// `{proxy_port}`) in a config string. Unknown tokens are left untouched.
+pub fn substitute_tokens(input: &str, ctx: &TokenCtx) -> String {
+    let mut out = input
+        .replace("{debug_port}", &ctx.debug_port.to_string())
+        .replace("{service}", ctx.service)
+        .replace("{domain}", ctx.domain)
+        .replace("{group}", ctx.group);
+    if let Some(p) = ctx.proxy_port {
+        out = out.replace("{proxy_port}", &p.to_string());
+    }
+    out
+}
+
+/// Default base of the debug-port range assigned by `darp deploy`. A dedicated
+/// sparse block well clear of the crowded 9000–9100 dev zone (php-fpm 9000,
+/// Prometheus 9090, Kafka 9092, …) and below the ephemeral range (49152+).
+/// Overridable per team via `Config.debug_port_base`.
+pub const DEBUG_PORT_BASE: u16 = 13000;
+
+/// Well-known host ports that debug-port assignment must never hand out, so a debug
+/// listener can't clash with a conventional local service. Mostly relevant if the
+/// base is lowered or the assigned range grows into these; harmless otherwise.
+pub fn well_known_skip_ports() -> std::collections::HashSet<u16> {
+    [
+        9000,  // php-fpm / SonarQube / Portainer
+        9003,  // Xdebug default
+        9090,  // Prometheus
+        9092,  // Kafka
+        9200,  // Elasticsearch
+        9229,  // Node.js inspector
+        11211, // memcached
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Decide a service's debug port. Reuse `persisted` **iff** it is in range (`>= base`)
+/// and not in `skip` — this keeps `.vscode/launch.json` stable across re-deploys.
+/// Otherwise assign the next free port at/above `base`, skipping `reserved` and `skip`,
+/// and record it. Persisted ports below `base` or now skipped are dropped (reassigned),
+/// which auto-migrates an older range onto a new base.
+pub fn choose_debug_port(
+    persisted: Option<u16>,
+    base: u16,
+    skip: &std::collections::HashSet<u16>,
+    reserved: &mut std::collections::HashSet<u16>,
+    next: &mut u16,
+) -> u16 {
+    if let Some(p) = persisted {
+        if p >= base && !skip.contains(&p) {
+            return p;
+        }
+    }
+    if *next < base {
+        *next = base;
+    }
+    while reserved.contains(&*next) || skip.contains(&*next) {
+        *next += 1;
+    }
+    let p = *next;
+    reserved.insert(p);
+    *next += 1;
+    p
+}
+
+/// Read a service's assigned `debug_port` from an already-parsed portmap value.
+pub fn portmap_debug_port(
+    portmap: &serde_json::Value,
+    domain: &str,
+    group: &str,
+    service: &str,
+) -> Option<u16> {
+    portmap
+        .get(domain)
+        .and_then(|d| d.get(group))
+        .and_then(|g| g.get(service))
+        .and_then(|v| v.get("debug_port"))
+        .and_then(|p| p.as_u64())
+        .map(|p| p as u16)
+}
+
+/// Read a service's reverse-proxy port from a portmap value. Entries are either a
+/// bare number (legacy) or an object `{"port": N, ...}`.
+pub fn portmap_proxy_port(
+    portmap: &serde_json::Value,
+    domain: &str,
+    group: &str,
+    service: &str,
+) -> Option<u16> {
+    portmap
+        .get(domain)
+        .and_then(|d| d.get(group))
+        .and_then(|g| g.get(service))
+        .and_then(|v| {
+            v.get("port")
+                .and_then(|p| p.as_u64())
+                .or_else(|| v.as_u64())
+        })
+        .map(|p| p as u16)
+}
+
 #[derive(Clone, Debug)]
 pub struct DarpPaths {
     pub _darp_root: PathBuf,
@@ -76,6 +195,10 @@ pub struct Config {
     pub urls_in_hosts: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl: Option<bool>,
+    /// Base of the per-service debug-port range assigned by `darp deploy`.
+    /// Defaults to `DEBUG_PORT_BASE` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_port_base: Option<u16>,
 }
 
 /// Allowed values for a service's connection_type. Absent/None is treated as "http".

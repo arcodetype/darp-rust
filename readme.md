@@ -8,6 +8,9 @@
 
 No YAML files. No port juggling. Just `cd` into a project and run `darp serve`.
 
+darp also assigns each service a stable debug port, so editor/debugger configs
+can track projects without fighting your local dev ports.
+
 ## Install
 
 ### From crates.io
@@ -112,6 +115,8 @@ curl http://hello-world.projects.test
 That's it. Any edits you make in `~/projects/hello-world/` are live-reloaded.
 
 > **Tip:** Run `darp deploy` after adding new project folders so darp registers URLs for them.
+> `darp deploy` also assigns each service a stable debug port. Run `darp urls`
+> to see both the app URL and its debug port.
 
 ## How It Works
 
@@ -125,8 +130,9 @@ When you run `darp serve` or `darp shell` from a project folder, darp:
 
 1. Detects which domain and service you're in based on your current directory
 2. Resolves settings from Service > Group > Domain > Environment (most specific wins)
-3. Builds a container command with the right ports, volumes, and env vars
-4. Reverse-proxies port 8000 through nginx to a `.test` URL
+3. Reads the deploy-generated port map, including the reverse-proxy port and per-service debug port
+4. Builds a container command with the right ports, volumes, env vars, and token-expanded commands
+5. Reverse-proxies port 8000 through nginx to a `.test` URL
 
 ## Key Concepts
 
@@ -140,6 +146,55 @@ When you run `darp serve` or `darp shell` from a project folder, darp:
 
 Settings cascade: **Service > Group > Domain > Environment**. The most specific level wins.
 
+## Debug Ports
+
+`darp deploy` assigns every service a stable, unique debug port and writes it to
+the local port map. By default these start at **13000**, avoiding crowded dev
+ports like 9000, 9003, 9090, 9092, 9200, and 9229. Existing valid assignments are
+reused on future deploys, so `.vscode/launch.json` or other debugger settings
+do not churn.
+
+See the assigned ports with:
+
+```sh
+darp urls
+# http://hello-world.projects.test (50100)  [debug: 13000]
+```
+
+You can reference runtime tokens in `serve_command`, `variables`, and
+`host_portmappings`:
+
+| Token | Expands to |
+|---|---|
+| `{debug_port}` | The service's assigned debug port |
+| `{proxy_port}` | The service's reverse-proxy port |
+| `{service}` | The current service name |
+| `{group}` | The current group name |
+| `{domain}` | The current domain name |
+
+For example:
+
+```sh
+darp config set env serve-command go 'dlv debug --headless --listen=:{debug_port}'
+```
+
+Or publish a debugger port and customize the assignment range directly in
+`~/.darp/config.json`:
+
+```json
+{
+  "debug_port_base": 14000,
+  "environments": {
+    "go": {
+      "serve_command": "dlv debug --headless --listen=:{debug_port}",
+      "host_portmappings": {
+        "{debug_port}": "{debug_port}"
+      }
+    }
+  }
+}
+```
+
 ## Documentation
 
 - [Configuration Guide](docs/configuration.md) -- settings, resolution, and config.json structure
@@ -151,10 +206,10 @@ Settings cascade: **Service > Group > Domain > Environment**. The most specific 
 
 ```sh
 darp install                    # Set up system integration (nginx, dnsmasq, completions)
-darp deploy                     # Register URLs for all domain folders
+darp deploy                     # Register URLs and assign stable debug ports
 darp serve                      # Run the serve_command in a container
 darp shell                      # Open an interactive shell in a container
-darp urls                       # List all registered URLs
+darp urls                       # List all registered URLs and debug ports
 darp config show                # Show resolved settings for current directory
 darp config show -e go          # Show what settings would apply with a specific environment
 darp config pull                # Git pull all pre_config repos

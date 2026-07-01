@@ -35,6 +35,42 @@ fn build_container_command(
 ) -> anyhow::Result<std::process::Command> {
     let container_name = format!("darp_{}_{}", resolved.domain_name, resolved.service_name);
 
+    let portmap: serde_json::Value =
+        config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
+
+    // Reverse-proxy port must have been assigned by `darp deploy`.
+    let rev_proxy_port = config::portmap_proxy_port(
+        &portmap,
+        &resolved.domain_name,
+        &resolved.group_name,
+        &resolved.service_name,
+    )
+    .unwrap_or_else(|| {
+        eprintln!(
+            "port not yet assigned to {}, run 'darp deploy'",
+            resolved.service_name
+        );
+        std::process::exit(1);
+    });
+
+    // Debug port is assigned by `darp deploy`; fall back to the base for stale portmaps
+    // written before this feature (so pre-upgrade deploys keep working).
+    let debug_port = config::portmap_debug_port(
+        &portmap,
+        &resolved.domain_name,
+        &resolved.group_name,
+        &resolved.service_name,
+    )
+    .unwrap_or(config::DEBUG_PORT_BASE);
+
+    let tokens = config::TokenCtx {
+        domain: &resolved.domain_name,
+        group: &resolved.group_name,
+        service: &resolved.service_name,
+        debug_port,
+        proxy_port: Some(rev_proxy_port),
+    };
+
     let mut cmd = if interactive {
         engine.base_run_interactive(&container_name)
     } else {
@@ -81,43 +117,25 @@ fn build_container_command(
         for (host_port, container_port) in pm {
             cmd.arg("-p").arg(format!(
                 "{host}:{container}",
-                host = host_port,
-                container = container_port
+                host = config::substitute_tokens(host_port, &tokens),
+                container = config::substitute_tokens(container_port, &tokens)
             ));
         }
     }
 
     if let Some(vars) = &resolved.variables {
         for (name, value) in vars {
-            cmd.arg("-e")
-                .arg(format!("{name}={value}", name = name, value = value));
+            cmd.arg("-e").arg(format!(
+                "{name}={value}",
+                name = name,
+                value = config::substitute_tokens(value, &tokens)
+            ));
         }
     }
 
     if let Some(ref platform) = resolved.platform {
         add_platform_args(&mut cmd, engine, platform);
     }
-
-    let portmap: serde_json::Value =
-        config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
-
-    // Portmap entries are either a bare number (legacy) or {"port": N, "type": "..."}.
-    let rev_proxy_port = portmap
-        .get(&resolved.domain_name)
-        .and_then(|d| d.get(&resolved.group_name))
-        .and_then(|g| g.get(&resolved.service_name))
-        .and_then(|v| {
-            v.get("port")
-                .and_then(|p| p.as_u64())
-                .or_else(|| v.as_u64())
-        })
-        .unwrap_or_else(|| {
-            eprintln!(
-                "port not yet assigned to {}, run 'darp deploy'",
-                resolved.service_name
-            );
-            std::process::exit(1);
-        });
 
     // Container-internal port convention keyed off connection_type:
     //   http      -> 8000 (default)
@@ -314,6 +332,32 @@ Use 'darp config set svc serve-command {} {} <cmd>' or \
         );
         std::process::exit(1);
     });
+
+    // Interpolate {debug_port}/{proxy_port}/… in the serve command so per-service
+    // debugger flags (e.g. `dlv --listen=:{debug_port}`) resolve. Ports come from the
+    // portmap written by `darp deploy`.
+    let serve_portmap: serde_json::Value =
+        config::read_json(&paths.portmap_path).unwrap_or_else(|_| serde_json::json!({}));
+    let serve_tokens = config::TokenCtx {
+        domain: &resolved.domain_name,
+        group: &resolved.group_name,
+        service: &resolved.service_name,
+        debug_port: config::portmap_debug_port(
+            &serve_portmap,
+            &resolved.domain_name,
+            &resolved.group_name,
+            &resolved.service_name,
+        )
+        .unwrap_or(config::DEBUG_PORT_BASE),
+        proxy_port: config::portmap_proxy_port(
+            &serve_portmap,
+            &resolved.domain_name,
+            &resolved.group_name,
+            &resolved.service_name,
+        ),
+    };
+    let serve_command = config::substitute_tokens(serve_command, &serve_tokens);
+    let serve_command = serve_command.as_str();
 
     let container_name = format!("darp_{}_{}", ctx.domain_name, ctx.current_directory_name);
 

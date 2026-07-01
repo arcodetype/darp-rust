@@ -1409,33 +1409,41 @@ pub fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
                                 .unwrap_or(0);
                             let conn_type =
                                 entry.get("type").and_then(|t| t.as_str()).unwrap_or("http");
+                            let debug_suffix = entry
+                                .get("debug_port")
+                                .and_then(|d| d.as_u64())
+                                .map(|d| format!("  [debug: {}]", d))
+                                .unwrap_or_default();
 
                             match conn_type {
                                 "tcp" => {
                                     println!(
-                                        "{}tcp://{}.{}.test:{}",
+                                        "{}tcp://{}.{}.test:{}{}",
                                         indent,
                                         service_name.blue(),
                                         domain_name.green(),
-                                        port
+                                        port,
+                                        debug_suffix
                                     );
                                 }
                                 "websocket" => {
                                     println!(
-                                        "{}ws://{}.{}.test ({})",
+                                        "{}ws://{}.{}.test ({}){}",
                                         indent,
                                         service_name.blue(),
                                         domain_name.green(),
-                                        port
+                                        port,
+                                        debug_suffix
                                     );
                                 }
                                 _ => {
                                     println!(
-                                        "{}http://{}.{}.test ({})",
+                                        "{}http://{}.{}.test ({}){}",
                                         indent,
                                         service_name.blue(),
                                         domain_name.green(),
-                                        port
+                                        port,
+                                        debug_suffix
                                     );
                                 }
                             }
