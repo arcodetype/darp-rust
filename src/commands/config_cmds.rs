@@ -1414,6 +1414,11 @@ pub fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
                                 .and_then(|d| d.as_u64())
                                 .map(|d| format!("  [debug: {}]", d))
                                 .unwrap_or_default();
+                            let aliases: Vec<&str> = entry
+                                .get("urls")
+                                .and_then(|u| u.as_array())
+                                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                                .unwrap_or_default();
 
                             match conn_type {
                                 "tcp" => {
@@ -1445,6 +1450,22 @@ pub fn cmd_urls(paths: &DarpPaths, _config: &Config) -> anyhow::Result<()> {
                                         port,
                                         debug_suffix
                                     );
+                                }
+                            }
+
+                            // Alias hostnames from the service's `urls`, indented under
+                            // the canonical URL they share an upstream with.
+                            for alias in &aliases {
+                                match conn_type {
+                                    "tcp" => {
+                                        println!("{}  tcp://{}:{}", indent, alias.blue(), port)
+                                    }
+                                    "websocket" => {
+                                        println!("{}  ws://{} ({})", indent, alias.blue(), port)
+                                    }
+                                    _ => {
+                                        println!("{}  http://{} ({})", indent, alias.blue(), port)
+                                    }
                                 }
                             }
                         }

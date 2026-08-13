@@ -49,7 +49,8 @@ The environment is determined by:
           "services": {
             "admin": {
               "serve_command": "php artisan serve --host 0.0.0.0",
-              "host_portmappings": { "8082": "8082" }
+              "host_portmappings": { "8082": "8082" },
+              "urls": ["local.admin.example.org"]
             }
           }
         }
@@ -113,6 +114,141 @@ Additionally:
 |---|---|---|
 | `default_environment` | Domain, Group, Service | Fallback environment when `-e` isn't passed |
 | `location` | Domain | Filesystem path to the domain folder |
+| `urls` | Service | Extra hostnames that reach this service alongside `{service}.{domain}.test` |
+
+## URL Aliases
+
+A service normally answers on one hostname, `{service}.{domain}.test`, derived
+from its folder name. `urls` adds more:
+
+```json
+"portal-website": {
+  "urls": ["local.comagine.org", "local.zoo.org"]
+}
+```
+
+`darp deploy` then writes an nginx `server` block for each alias, all proxying to
+the same upstream port as the canonical URL, and a `hosts_container` entry so the
+name works between containers. `darp urls` lists aliases indented under their
+service.
+
+### Making a non-`.test` alias resolve
+
+Aliases do not have to end in `.test`, but darp only resolves the name for you in
+some cases:
+
+| Alias | Resolves on the host because |
+|---|---|
+| `tenant-a.portal.test` | darp's dnsmasq rule `address=/.test/127.0.0.1` wildcards every `.test` name. Nothing else needed. |
+| `local.zoo.org` | Only with `urls_in_hosts: true`, which lets darp manage an entry in your system hosts file — or with another DNS source you run that resolves the name to `127.0.0.1`. |
+
+Configuring an alias does **not** implicitly enable or modify hosts-file
+synchronization; `urls_in_hosts` stays whatever you set it to. When darp detects
+a non-`.test` alias and `urls_in_hosts` is off, `darp deploy` prints a warning
+naming each affected service and alias, and points at:
+
+```sh
+darp config set urls-in-hosts true
+```
+
+The warning is informational — deployment continues, because darp cannot tell
+whether you already resolve those names some other way.
+
+WSL users who need the alias to work in **Windows** applications (a browser on
+the Windows side, for instance) may also need:
+
+```sh
+darp config set wsl true
+```
+
+which syncs the Windows hosts file alongside the Linux one. darp does not warn
+when `wsl` is false, since resolution inside WSL alone is a legitimate setup.
+
+This exists for apps that behave differently per hostname — a multi-tenant
+front-end that picks its tenant from `window.location.hostname`, for instance.
+Because every alias reaches the same container on the same port, the app sees
+the original hostname in the `Host` header and can branch on it.
+
+`urls` is service-level only and applies at deploy time. It does not cascade
+through group/domain/environment and has no `*urls` override form.
+
+### Hostname rules
+
+An alias value is a **hostname, not a URL**. `darp deploy` validates every alias
+before it writes anything, and rejects the whole deploy — leaving the previous
+deployment untouched — if any value is malformed. Every invalid alias across
+every service is reported in one error.
+
+Not allowed:
+
+- Schemes (`http://`, `https://`), ports, paths, query strings, fragments, and
+  user information.
+- Whitespace, control characters, and characters that would alter nginx or
+  hosts-file syntax (`;`, `{`, `}`, quotes, backslash).
+- Wildcards such as `*.zoo.org`.
+- IPv4 and IPv6 address literals — `urls` names alternate hostnames, not
+  alternate listener addresses.
+- Labels that are empty, longer than 63 characters, or that begin or end with a
+  hyphen; hostnames longer than 253 characters.
+- Raw non-ASCII names. Internationalized hostnames must be supplied in
+  ASCII/Punycode form (`xn--…`).
+
+Normalization applied to accepted values:
+
+- Surrounding whitespace is trimmed.
+- One optional trailing DNS dot is accepted and removed (`local.zoo.org.` →
+  `local.zoo.org`).
+- ASCII letters are lowercased, since DNS is case-insensitive.
+
+The normalized value is what lands in the nginx `server_name`, the hosts files,
+`portmap.json`, and `darp urls` output.
+
+Valid:
+
+```json
+"urls": ["local.zoo.org", "tenant-a.portal.test"]
+```
+
+### One hostname, one service
+
+Every HTTP/WebSocket hostname must identify exactly one service. nginx routes by
+`server_name`: if two server blocks declare the same name it ignores the second
+and sends all traffic for that hostname to whichever service was registered
+first — and registration follows directory-scan order, which is not stable, so
+the winner can change from one deploy to the next.
+
+`darp deploy` therefore refuses to deploy when a hostname is claimed twice, and
+reports every conflict at once:
+
+- An alias cannot duplicate another HTTP/WebSocket service's alias or canonical
+  URL.
+- Two canonical URLs cannot collide either. A canonical URL is
+  `{folder}.{domain}.test` with no group component, so two identically-named
+  folders in different groups of the same domain claim the same hostname.
+
+Comparison is case-insensitive, and a terminal DNS dot does not make a hostname
+unique — `LOCAL.ZOO.ORG`, `local.zoo.org.`, and `local.zoo.org` are one name.
+
+Repeated aliases *within* one service are not a conflict: they resolve to the
+same upstream, so they are deduplicated to a single hosts entry and a single
+server block. An alias equal to the service's own canonical URL is dropped for
+the same reason. This is what makes `pre_config` merging safe — array values
+concatenate, so a personal config re-listing a team alias is harmless.
+
+TCP services are exempt. They get no nginx server block and are distinguished by
+their assigned ports, so two TCP services — or a TCP service and an
+HTTP/WebSocket service — may share a hostname. Syntax validation and
+same-service deduplication still apply to their aliases.
+
+Invalid:
+
+```json
+"urls": [
+  "https://local.zoo.org",
+  "local.zoo.org:8080",
+  "local.zoo.org/path"
+]
+```
 
 ## Viewing Resolved Config
 
