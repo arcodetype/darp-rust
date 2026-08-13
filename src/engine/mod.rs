@@ -476,10 +476,10 @@ impl Engine {
 
             if let Some(code) = status.code() {
                 if restart_on.contains(&code) {
-                    println!("restarting {} with code {}", container_name.cyan(), &code);
+                    println!("restarting {} with code {}", container_name.cyan(), code);
                     continue;
                 }
-                println!("exiting with status code {}", &code);
+                println!("exiting with status code {}", code);
             }
 
             // Normal exit or non-restartable error

@@ -4200,11 +4200,13 @@ mod tests {
         .unwrap();
 
         // Create a leaf config with a pre_config pointing to the parent
-        let mut config = Config::default();
-        config.pre_config = Some(vec![PreConfig {
-            location: parent_path.to_string_lossy().into_owned(),
-            repo_location: None,
-        }]);
+        let mut config = Config {
+            pre_config: Some(vec![PreConfig {
+                location: parent_path.to_string_lossy().into_owned(),
+                repo_location: None,
+            }]),
+            ..Default::default()
+        };
 
         // Should find the domain from the pre_config without -l
         config.ensure_domain_exists("parent-dom", None).unwrap();
@@ -4236,11 +4238,13 @@ mod tests {
         )
         .unwrap();
 
-        let mut config = Config::default();
-        config.pre_config = Some(vec![PreConfig {
-            location: parent_path.to_string_lossy().into_owned(),
-            repo_location: None,
-        }]);
+        let mut config = Config {
+            pre_config: Some(vec![PreConfig {
+                location: parent_path.to_string_lossy().into_owned(),
+                repo_location: None,
+            }]),
+            ..Default::default()
+        };
 
         // Domain comes from pre_config, group and service auto-created
         config.ensure_domain_exists("parent-dom", None).unwrap();

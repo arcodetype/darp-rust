@@ -189,8 +189,10 @@ fn find_context_grandparent_is_domain() {
         .unwrap();
 
     // Add a "backend" group
-    let mut backend_group = Group::default();
-    backend_group.serve_command = Some("cargo run".into());
+    let backend_group = Group {
+        serve_command: Some("cargo run".into()),
+        ..Default::default()
+    };
     let mut groups = BTreeMap::new();
     groups.insert("backend".to_string(), backend_group);
     config
@@ -370,8 +372,6 @@ fn service_context_from_cwd_service_default_env_beats_group_and_domain() {
     domain.default_environment = Some("dom-env".to_string());
 
     // "." group with default = grp-env, and a service "myapp" with default = svc-env
-    let mut dot_group = Group::default();
-    dot_group.default_environment = Some("grp-env".to_string());
     let mut services = BTreeMap::new();
     services.insert(
         "myapp".to_string(),
@@ -380,7 +380,11 @@ fn service_context_from_cwd_service_default_env_beats_group_and_domain() {
             ..Default::default()
         },
     );
-    dot_group.services = Some(services);
+    let dot_group = Group {
+        default_environment: Some("grp-env".to_string()),
+        services: Some(services),
+        ..Default::default()
+    };
     let mut groups = BTreeMap::new();
     groups.insert(".".to_string(), dot_group);
     domain.groups = Some(groups);
