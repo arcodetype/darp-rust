@@ -172,22 +172,36 @@ impl Engine {
         }
     }
 
-    pub fn base_run_interactive(&self, container_name: &str) -> Command {
+    /// `run --rm [-it|-i|-t] --name <name>`.
+    ///
+    /// The stdin and tty flags are separate so `darp exec` can forward stdin without
+    /// demanding a pty the host may not have (piped input, CI).
+    pub fn base_run(&self, container_name: &str, interactive: bool, tty: bool) -> Command {
         let bin = self.bin.expect("engine bin not set");
         let mut cmd = Command::new(bin);
-        cmd.arg("run")
-            .arg("--rm")
-            .arg("-it")
-            .arg("--name")
-            .arg(container_name);
+        cmd.arg("run").arg("--rm");
+        match (interactive, tty) {
+            (true, true) => {
+                cmd.arg("-it");
+            }
+            (true, false) => {
+                cmd.arg("-i");
+            }
+            (false, true) => {
+                cmd.arg("-t");
+            }
+            (false, false) => {}
+        }
+        cmd.arg("--name").arg(container_name);
         cmd
     }
 
+    pub fn base_run_interactive(&self, container_name: &str) -> Command {
+        self.base_run(container_name, true, true)
+    }
+
     pub fn base_run_noninteractive(&self, container_name: &str) -> Command {
-        let bin = self.bin.expect("engine bin not set");
-        let mut cmd = Command::new(bin);
-        cmd.arg("run").arg("--rm").arg("--name").arg(container_name);
-        cmd
+        self.base_run(container_name, false, false)
     }
 
     pub fn command_to_string(&self, cmd: &Command) -> String {

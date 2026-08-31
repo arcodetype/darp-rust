@@ -253,3 +253,132 @@ fn smoke_shell_dry_run() {
     // Cleanup
     let _ = run_darp(&bin, root.path(), &["uninstall"]);
 }
+
+/// Configure a domain with a default image and deploy, returning the service dir.
+fn setup_service(bin: &PathBuf, root: &std::path::Path) -> PathBuf {
+    setup_engine(bin, root);
+
+    let domain_dir = root.join("projects");
+    let service_dir = domain_dir.join("myapp");
+    std::fs::create_dir_all(&service_dir).unwrap();
+
+    run_darp(
+        bin,
+        root,
+        &[
+            "config",
+            "set",
+            "dom",
+            "default-container-image",
+            "projects",
+            "alpine",
+            "-l",
+            &domain_dir.to_string_lossy(),
+        ],
+    );
+
+    let output = run_darp(bin, root, &["deploy"]);
+    assert!(output.status.success(), "deploy: {}", stderr(&output));
+
+    service_dir
+}
+
+#[test]
+#[ignore]
+fn smoke_exec_dry_run() {
+    let bin = darp_bin();
+    let root = tempfile::tempdir().unwrap();
+    let engine = test_engine();
+    let service_dir = setup_service(&bin, root.path());
+
+    let output = run_darp_in(
+        &bin,
+        root.path(),
+        &service_dir,
+        &["exec", "--dry-run", "php", "artisan", "migrate", "--force"],
+    );
+    assert!(
+        output.status.success(),
+        "exec dry-run: {}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+
+    let out = stdout(&output);
+    // The user's argv is passed through verbatim, after the sh wrapper's $0.
+    assert!(
+        out.contains("darp-exec php artisan migrate --force"),
+        "dry-run should pass the command through verbatim: {}",
+        out
+    );
+    assert!(
+        out.contains(&engine),
+        "dry-run should name the engine: {}",
+        out
+    );
+    // No container is running, so this is the cold-start branch.
+    assert!(
+        out.contains("alpine"),
+        "dry-run should use the image: {}",
+        out
+    );
+
+    // Cleanup
+    let _ = run_darp(&bin, root.path(), &["uninstall"]);
+}
+
+#[test]
+#[ignore]
+fn smoke_exec_runs_and_propagates_exit_code() {
+    let bin = darp_bin();
+    let root = tempfile::tempdir().unwrap();
+    let service_dir = setup_service(&bin, root.path());
+
+    // stdout belongs to the command — no darp banners mixed in.
+    let output = run_darp_in(&bin, root.path(), &service_dir, &["exec", "echo", "hello"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "exec echo: {}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert_eq!(
+        stdout(&output).trim(),
+        "hello",
+        "stdout: {}",
+        stdout(&output)
+    );
+
+    // A failing command's exit code becomes darp's exit code.
+    let output = run_darp_in(
+        &bin,
+        root.path(),
+        &service_dir,
+        &["exec", "sh", "-c", "exit 7"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "exec should propagate exit 7: {}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+
+    // Arguments reach the command unsplit rather than being re-parsed by a shell.
+    let output = run_darp_in(
+        &bin,
+        root.path(),
+        &service_dir,
+        &["exec", "echo", "one two; three"],
+    );
+    assert_eq!(
+        stdout(&output).trim(),
+        "one two; three",
+        "stdout: {}",
+        stdout(&output)
+    );
+
+    // Cleanup
+    let _ = run_darp(&bin, root.path(), &["uninstall"]);
+}

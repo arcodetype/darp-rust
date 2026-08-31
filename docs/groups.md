@@ -91,7 +91,7 @@ darp config set svc serve-command -g laravel my-org admin 'php artisan serve --h
 
 ## How darp Detects Your Group
 
-When you run `darp serve` or `darp shell`, darp looks at your current directory:
+When you run `darp serve`, `darp shell` or `darp exec`, darp looks at your current directory:
 
 1. **Parent is a domain folder?** You're in the `.` group.
    - `~/my-org/standalone-tool/` -> domain=my-org, group=`.`, service=standalone-tool

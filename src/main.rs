@@ -44,6 +44,25 @@ fn main() -> anyhow::Result<()> {
                     Command::Install => cmd_install(&paths, &config, &os, &engine)?,
                     Command::Uninstall => cmd_uninstall(&paths, &mut config.clone(), &os, &engine)?,
                     Command::Deploy => cmd_deploy(&paths, &config, &os, &engine)?,
+                    Command::Exec {
+                        environment,
+                        dry_run,
+                        image,
+                        cmd: exec_cmd,
+                    } => {
+                        let code = cmd_exec(
+                            environment,
+                            dry_run,
+                            image,
+                            exec_cmd,
+                            &paths,
+                            &config,
+                            &engine,
+                        )?;
+                        if code != 0 {
+                            std::process::exit(code);
+                        }
+                    }
                     Command::Shell {
                         environment,
                         dry_run,

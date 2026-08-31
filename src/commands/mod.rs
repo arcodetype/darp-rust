@@ -13,4 +13,7 @@ pub use deploy::{
     render_unresolved_alias_warning, validate_plan_aliases,
 };
 pub use doctor::{cmd_check_image, cmd_doctor};
-pub use run::{cmd_serve, cmd_shell};
+pub use run::{
+    EXEC_ARGV0, EXEC_SCRIPT, cmd_exec, cmd_serve, cmd_shell, container_exec_argv,
+    exec_wrapper_argv, exit_code_for,
+};

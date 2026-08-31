@@ -51,6 +51,29 @@ darp shell -e go                   # specify environment
 darp shell --dry-run               # print without running
 ```
 
+### `darp exec`
+
+Runs a one-off command inside the service container, from `/app`, and exits with that command's exit code. Unlike `darp shell`, the command stays in your **host** shell history, so up-arrow re-runs it and it composes with `&&`, scripts and CI.
+
+If the service's container is already running, the command runs inside it. If not, darp starts a throwaway container — same volumes, variables, ports and `/etc/hosts` as `darp shell`, minus nginx — runs the command, and removes it.
+
+```sh
+darp exec php artisan migrate      # run in /app inside the container
+darp exec php artisan migrate --force   # flags after the command pass through
+darp exec -- php -v                # use -- when the command itself starts with a flag
+darp exec -e go go test ./...      # specify environment (cold start only)
+darp exec --image alpine sh -c 'ls | wc -l'   # pipes/redirects need an explicit shell
+darp exec --dry-run php artisan migrate       # print without running
+```
+
+Arguments are passed through verbatim — darp never re-splits or re-quotes them — so shell metacharacters are interpreted by *your* shell, not the container's. `darp exec ls | grep foo` pipes on the host; wrap the command in `sh -c '…'` when you want the container to interpret it.
+
+`-e/--environment` and `--image` only apply when a container has to be started. When one is already running the command inherits that container's environment.
+
+A pty is allocated only when your terminal has one, so `darp exec … | grep foo` and CI runs produce clean output.
+
+Note that darp resolves the service from your current directory, so run `darp exec` from the project folder itself — from a subdirectory darp would treat that subdirectory as the service.
+
 ### `darp urls`
 
 Lists all registered URLs and their ports, grouped by service group. Services under named groups appear under a cyan group header; services in the default group (`.`) are listed without a header.

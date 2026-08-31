@@ -126,7 +126,7 @@ That's it. Any edits you make in `~/projects/hello-world/` are live-reloaded.
   billing-api/                  <- billing-api.projects.test
 ```
 
-When you run `darp serve` or `darp shell` from a project folder, darp:
+When you run `darp serve`, `darp shell` or `darp exec` from a project folder, darp:
 
 1. Detects which domain and service you're in based on your current directory
 2. Resolves settings from Service > Group > Domain > Environment (most specific wins)
@@ -209,6 +209,7 @@ darp install                    # Set up system integration (nginx, dnsmasq, com
 darp deploy                     # Register URLs and assign stable debug ports
 darp serve                      # Run the serve_command in a container
 darp shell                      # Open an interactive shell in a container
+darp exec <cmd>...              # Run a one-off command in the container, exiting with its code
 darp urls                       # List all registered URLs and debug ports
 darp config show                # Show resolved settings for current directory
 darp config show -e go          # Show what settings would apply with a specific environment

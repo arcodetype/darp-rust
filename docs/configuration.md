@@ -4,7 +4,7 @@ darp stores its configuration in `~/.darp/config.json`. You can edit this file d
 
 ## Settings Resolution
 
-When you run `darp serve` or `darp shell`, settings are resolved from most specific to least specific:
+When you run `darp serve`, `darp shell` or `darp exec`, settings are resolved from most specific to least specific:
 
 ```
 Service > Group > Domain > Environment

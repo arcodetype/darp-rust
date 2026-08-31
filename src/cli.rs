@@ -22,6 +22,35 @@ pub enum Command {
     },
     /// Generates domains and starts reverse proxy
     Deploy,
+    /// Run a one-off command inside the service container
+    ///
+    /// If the service container is already running the command runs inside it;
+    /// otherwise a throwaway container is started, the command runs, and the
+    /// container is removed. darp exits with the command's own exit code.
+    ///
+    /// Everything from the first non-flag argument onward is passed through
+    /// verbatim, so `darp exec php artisan migrate --force` works as written.
+    /// Use `--` when the command itself starts with a flag: `darp exec -- php -v`.
+    Exec {
+        /// Environment name (only affects the cold-start path)
+        #[arg(short, long)]
+        environment: Option<String>,
+        /// Print the generated container command and exit without running it
+        #[arg(long)]
+        dry_run: bool,
+        /// Container image for the cold-start path (optional if default_container_image is configured)
+        #[arg(long = "image", value_name = "IMAGE")]
+        image: Option<String>,
+        /// Command and arguments to run inside the container
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "CMD",
+            value_hint = clap::ValueHint::CommandWithArguments
+        )]
+        cmd: Vec<String>,
+    },
     /// Runs the environment serve_command (uses domain default_environment if set)
     Serve {
         /// Environment name (optional; falls back to domain default_environment if configured)
