@@ -216,6 +216,62 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
         s.print();
     }
 
+    // 4b. nginx configuration
+    {
+        let mut s = DoctorSection::new("nginx configuration");
+
+        // Settings as written in config.json — no engine needed.
+        let maps = config.nginx_maps();
+        let mut bad_settings = false;
+        for (label, map) in &maps {
+            for (name, value) in *map {
+                if let Err(e) = config::validate_nginx_directive(name, value) {
+                    s.fail(&format!("{label}: {e}"));
+                    bad_settings = true;
+                }
+            }
+        }
+        if !maps.is_empty() && !bad_settings {
+            s.ok("nginx settings in config are valid");
+        }
+
+        // Deployed nginx.conf vs. what the current settings would produce.
+        if !bad_settings {
+            if let (Ok(deployed), Ok(expected)) = (
+                fs::read_to_string(&paths.nginx_conf_path),
+                crate::os::render_nginx_conf(config.nginx.as_ref()),
+            ) {
+                if deployed == expected {
+                    s.ok("nginx.conf matches current settings");
+                } else {
+                    s.warn("nginx.conf differs from current settings — run 'darp deploy'");
+                }
+            }
+        }
+
+        // Ask nginx itself about the deployed files. The proxy runs with --rm, so if
+        // nginx exits on a bad config the container (and its logs) are gone; this is
+        // how the reason is recovered.
+        if !engine_ready {
+            s.warn("nginx -t skipped — container engine is not running");
+        } else if paths.nginx_conf_path.is_file() && paths.vhost_container_conf.is_file() {
+            match engine.test_nginx_config(&paths.nginx_conf_path, &paths.vhost_container_conf) {
+                Ok(()) => s.ok("Deployed config passes nginx -t"),
+                Err(e) => {
+                    s.fail("Deployed config fails nginx -t:");
+                    for line in e.to_string().lines() {
+                        s.fail(&format!("  {line}"));
+                    }
+                }
+            }
+        }
+
+        if !s.passed() {
+            issue_count += 1;
+        }
+        s.print();
+    }
+
     // 5. Shell completions
     {
         let shell = detect_shell();

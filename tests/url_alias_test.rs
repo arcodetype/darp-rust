@@ -5,6 +5,8 @@
 //! built from — the vhost renderer, the deployment planner, and the validators —
 //! are tested directly. That is why they are public.
 
+use std::collections::BTreeMap;
+
 use darp::alias::{AliasErrorReason, validate_and_normalize_alias};
 use darp::commands::{
     PlannedService, build_host_proxy_vhost, build_hosts_lines, build_portmap,
@@ -39,6 +41,7 @@ fn planned_full(
         debug_port: 13000,
         canonical_hostname: format!("{service}.{domain}.test"),
         aliases: aliases.iter().map(|s| s.to_string()).collect(),
+        nginx: BTreeMap::new(),
     }
 }
 
@@ -117,7 +120,12 @@ impl Scratch {
 
 #[test]
 fn vhost_substitutes_url_gateway_and_port() {
-    let vhost = build_host_proxy_vhost("local.zoo.org", "host.docker.internal", 50123);
+    let vhost = build_host_proxy_vhost(
+        "local.zoo.org",
+        "host.docker.internal",
+        50123,
+        &BTreeMap::new(),
+    );
 
     assert!(vhost.contains("server_name local.zoo.org;"));
     assert!(vhost.contains("proxy_pass http://host.docker.internal:50123/;"));
@@ -133,7 +141,12 @@ fn vhost_substitutes_url_gateway_and_port() {
 fn vhost_forwards_websocket_upgrade() {
     // Vite HMR arrives on the alias hostname over the same port 80 the page used,
     // so every alias vhost has to forward the upgrade handshake.
-    let vhost = build_host_proxy_vhost("local.zoo.org", "host.docker.internal", 50123);
+    let vhost = build_host_proxy_vhost(
+        "local.zoo.org",
+        "host.docker.internal",
+        50123,
+        &BTreeMap::new(),
+    );
 
     assert!(vhost.contains("proxy_http_version 1.1;"));
     assert!(vhost.contains("proxy_set_header Upgrade $http_upgrade;"));
@@ -144,15 +157,20 @@ fn vhost_forwards_websocket_upgrade() {
 fn vhost_passes_original_host_through() {
     // A multi-tenant app branches on the hostname it was reached by, so the alias
     // name — not the canonical one — has to survive the proxy hop.
-    let vhost = build_host_proxy_vhost("local.aianqio.org", "gw", 50100);
+    let vhost = build_host_proxy_vhost("local.aianqio.org", "gw", 50100, &BTreeMap::new());
 
     assert!(vhost.contains("proxy_set_header Host $host;"));
 }
 
 #[test]
 fn canonical_and_alias_share_one_upstream_port() {
-    let canonical = build_host_proxy_vhost("portal-website.comagine.test", "gw", 50100);
-    let alias = build_host_proxy_vhost("local.zoo.org", "gw", 50100);
+    let canonical = build_host_proxy_vhost(
+        "portal-website.comagine.test",
+        "gw",
+        50100,
+        &BTreeMap::new(),
+    );
+    let alias = build_host_proxy_vhost("local.zoo.org", "gw", 50100, &BTreeMap::new());
 
     assert!(canonical.contains("server_name portal-website.comagine.test;"));
     assert!(alias.contains("server_name local.zoo.org;"));

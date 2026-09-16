@@ -314,6 +314,33 @@ pub fn cmd_set(
                     )),
                 )?;
             }
+            SetSvcCommand::Nginx {
+                domain_name,
+                group_name,
+                service_name,
+                directive,
+                value,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_service_nginx(
+                            &domain_name,
+                            &group_name,
+                            &service_name,
+                            &directive,
+                            &value,
+                        )
+                    },
+                    Some(format!(
+                        "Set nginx {} {} for service '{}.{}'. Run `darp deploy` to apply.",
+                        directive, value, domain_name, service_name
+                    )),
+                )?;
+            }
         },
         SetCommand::Dom { cmd } => match cmd {
             SetDomCommand::DefaultEnvironment {
@@ -439,6 +466,25 @@ pub fn cmd_set(
                     Some(format!(
                         "Set connection_type for domain '{}' to:\n  {}",
                         domain_name, connection_type
+                    )),
+                )?;
+            }
+            SetDomCommand::Nginx {
+                domain_name,
+                directive,
+                value,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_domain_nginx(&domain_name, &directive, &value)
+                    },
+                    Some(format!(
+                        "Set nginx {} {} for domain '{}'. Run `darp deploy` to apply.",
+                        directive, value, domain_name
                     )),
                 )?;
             }
@@ -585,6 +631,26 @@ pub fn cmd_set(
                     )),
                 )?;
             }
+            SetGrpCommand::Nginx {
+                domain_name,
+                group_name,
+                directive,
+                value,
+                location,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| {
+                        c.ensure_domain_exists(&domain_name, location.as_deref())?;
+                        c.set_group_nginx(&domain_name, &group_name, &directive, &value)
+                    },
+                    Some(format!(
+                        "Set nginx {} {} for group '{}' in domain '{}'. Run `darp deploy` to apply.",
+                        directive, value, group_name, domain_name
+                    )),
+                )?;
+            }
         },
         SetCommand::UrlsInHosts { value } => {
             let v = config.parse_bool(&value)?;
@@ -599,6 +665,17 @@ pub fn cmd_set(
                     "urls_in_hosts has been {} (stored in {}). Next 'darp deploy' will sync /etc/hosts accordingly.",
                     if v { "enabled" } else { "disabled" },
                     p.display()
+                )),
+            )?;
+        }
+        SetCommand::Nginx { directive, value } => {
+            config_mutate(
+                config,
+                p,
+                |c| c.set_global_nginx(&directive, &value),
+                Some(format!(
+                    "Set global nginx {} {}. Run `darp deploy` to apply.",
+                    directive, value
                 )),
             )?;
         }
@@ -854,6 +931,9 @@ pub fn cmd_add(cmd: AddCommand, paths: &DarpPaths, config: &mut Config) -> anyho
 pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow::Result<()> {
     let p = &paths.config_path;
     match cmd {
+        RmCommand::Nginx { directive } => {
+            config_mutate(config, p, |c| c.rm_global_nginx(&directive), None)?;
+        }
         RmCommand::PodmanMachine {} => {
             config_mutate(
                 config,
@@ -967,6 +1047,17 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     config,
                     p,
                     |c| c.rm_domain_connection_type(&domain_name),
+                    None,
+                )?;
+            }
+            RmDomCommand::Nginx {
+                domain_name,
+                directive,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_domain_nginx(&domain_name, &directive),
                     None,
                 )?;
             }
@@ -1086,6 +1177,18 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     config,
                     p,
                     |c| c.rm_group_connection_type(&domain_name, &group_name),
+                    None,
+                )?;
+            }
+            RmGrpCommand::Nginx {
+                domain_name,
+                group_name,
+                directive,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_group_nginx(&domain_name, &group_name, &directive),
                     None,
                 )?;
             }
@@ -1285,6 +1388,19 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     config,
                     p,
                     |c| c.rm_service_connection_type(&domain_name, &group_name, &service_name),
+                    None,
+                )?;
+            }
+            RmSvcCommand::Nginx {
+                domain_name,
+                group_name,
+                service_name,
+                directive,
+            } => {
+                config_mutate(
+                    config,
+                    p,
+                    |c| c.rm_service_nginx(&domain_name, &group_name, &service_name, &directive),
                     None,
                 )?;
             }

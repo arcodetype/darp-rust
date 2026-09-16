@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 
 fn cmd_install(
     paths: &DarpPaths,
-    _config: &Config,
+    config: &Config,
     os: &OsIntegration,
     engine: &Engine,
 ) -> anyhow::Result<()> {
@@ -115,7 +115,7 @@ fn cmd_install(
 
     os.init_resolver()?;
     os.ensure_dnsmasq_dir()?;
-    os.copy_nginx_conf()?;
+    os.copy_nginx_conf(config.nginx.as_ref())?;
     os.write_test_conf()?;
 
     engine.configure_unprivileged_ports_if_needed()?;

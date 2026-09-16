@@ -16,6 +16,39 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// Read an `nginx` directive map, taking bare JSON numbers as well as strings. A
+/// number is kept as its digits rather than rejected here, so the config still
+/// loads and [`validate_nginx_directive`] reports it with a useful hint (a bare `50`
+/// means 50 bytes to nginx; only `0` is accepted without a unit).
+fn deserialize_nginx_map<'de, D>(d: D) -> Result<Option<BTreeMap<String, String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    let Some(raw) = Option::<BTreeMap<String, serde_json::Value>>::deserialize(d)? else {
+        return Ok(None);
+    };
+    raw.into_iter()
+        .map(|(name, value)| match value {
+            serde_json::Value::String(s) => Ok((name, s)),
+            serde_json::Value::Number(n) => Ok((name, n.to_string())),
+            other => Err(D::Error::custom(format!(
+                "nginx directive '{name}' must be a string or number, got {other}"
+            ))),
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
+fn deserialize_nginx_map_override<'de, D>(
+    d: D,
+) -> Result<Option<Option<BTreeMap<String, String>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_nginx_map(d).map(Some)
+}
+
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let data = fs::read(path)?;
     Ok(serde_json::from_slice(&data)?)
@@ -199,6 +232,190 @@ pub struct Config {
     /// Defaults to `DEBUG_PORT_BASE` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug_port_base: Option<u16>,
+    /// Global nginx directives, written into the `http` block of the generated
+    /// `nginx.conf`. A directive darp already sets there is replaced, not repeated.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_nginx_map"
+    )]
+    pub nginx: Option<BTreeMap<String, String>>,
+}
+
+/// Directive names an `nginx` map may not set: darp generates them itself, or they
+/// open a block and so can't be expressed as a single `name value;` line.
+pub const RESERVED_NGINX_DIRECTIVES: &[&str] = &[
+    "listen",
+    "server_name",
+    "location",
+    "proxy_pass",
+    "server",
+    "include",
+    "http",
+    "events",
+    "map",
+    "upstream",
+    "if",
+];
+
+/// Directives whose value is a size, checked by [`validate_nginx_size`].
+const NGINX_SIZE_DIRECTIVES: &[&str] = &[
+    "client_max_body_size",
+    "client_body_buffer_size",
+    "proxy_buffer_size",
+    "proxy_busy_buffers_size",
+];
+
+/// Statically check one `nginx` map entry. Every entry must render as exactly one
+/// `name value;` line — the value is spliced into nginx config verbatim, so
+/// anything that could close the directive or open a block is rejected. Whether
+/// nginx knows the directive, or allows it in that context, is left to the
+/// `nginx -t` check `darp deploy` runs.
+pub fn validate_nginx_directive(name: &str, value: &str) -> Result<()> {
+    let valid_name = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !valid_name {
+        return Err(anyhow!(
+            "invalid nginx directive name '{name}' (expected lowercase letters, digits and _, e.g. proxy_read_timeout)"
+        ));
+    }
+    if RESERVED_NGINX_DIRECTIVES.contains(&name) {
+        return Err(anyhow!(
+            "nginx directive '{name}' is managed by darp and can't be set"
+        ));
+    }
+    if value.trim().is_empty() {
+        return Err(anyhow!("nginx directive '{name}' has an empty value"));
+    }
+    if let Some(c) = value
+        .chars()
+        .find(|c| matches!(c, ';' | '{' | '}' | '#' | '\n' | '\r'))
+    {
+        return Err(anyhow!(
+            "invalid value for nginx directive '{name}': {c:?} is not allowed (one directive per entry)"
+        ));
+    }
+    if NGINX_SIZE_DIRECTIVES.contains(&name) {
+        validate_nginx_size(name, value)?;
+    }
+    Ok(())
+}
+
+/// Accept `0` or digits with a k/m/g unit. nginx would also take a unit-less byte
+/// count, but `50` meaning 50 bytes is almost always a mistake for `50m`, so darp
+/// requires the unit.
+pub fn validate_nginx_size(name: &str, value: &str) -> Result<()> {
+    let is_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+
+    if value == "0" {
+        return Ok(());
+    }
+    if let Some(digits) = value.strip_suffix(['k', 'K', 'm', 'M', 'g', 'G']) {
+        if is_digits(digits) {
+            return Ok(());
+        }
+    }
+    if is_digits(value) {
+        return Err(anyhow!(
+            "invalid {name} '{value}': a number without a unit means bytes to nginx. \
+             Use '{value}m' for megabytes (or k/g), or 0"
+        ));
+    }
+    Err(anyhow!(
+        "invalid {name} '{value}' (expected a size with a k/m/g unit, e.g. 50m, or 0)"
+    ))
+}
+
+/// Resolve the `nginx` directives for one service by walking domain → group →
+/// service: maps merge with the more specific key winning, and `*nginx` replaces
+/// (or with `null`, clears) what was inherited. Environments don't apply: deploy
+/// writes vhosts outside any environment.
+pub fn resolve_nginx_directives(
+    domain: &Domain,
+    group: Option<&Group>,
+    service: Option<&Service>,
+) -> BTreeMap<String, String> {
+    let mut acc = None;
+    merge_map(&mut acc, &decl_ref(&domain.nginx, &domain.nginx_override));
+    if let Some(g) = group {
+        merge_map(&mut acc, &decl_ref(&g.nginx, &g.nginx_override));
+    }
+    if let Some(s) = service {
+        merge_map(&mut acc, &decl_ref(&s.nginx, &s.nginx_override));
+    }
+    acc.unwrap_or_default()
+}
+
+impl Config {
+    /// Every non-empty `nginx` map in the config (plain and `*nginx`), labeled with
+    /// where it lives. These hold the only nginx content darp didn't generate itself.
+    pub fn nginx_maps(&self) -> Vec<(String, &BTreeMap<String, String>)> {
+        fn push<'a>(
+            out: &mut Vec<(String, &'a BTreeMap<String, String>)>,
+            label: String,
+            plain: &'a Option<BTreeMap<String, String>>,
+            override_: &'a Option<Option<BTreeMap<String, String>>>,
+        ) {
+            for m in [plain.as_ref(), override_.as_ref().and_then(|o| o.as_ref())]
+                .into_iter()
+                .flatten()
+            {
+                if !m.is_empty() {
+                    out.push((label.clone(), m));
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        push(&mut out, "global".to_string(), &self.nginx, &None);
+        for (dom_name, dom) in self.domains.iter().flatten() {
+            push(&mut out, dom_name.clone(), &dom.nginx, &dom.nginx_override);
+            for (grp_name, grp) in dom.groups.iter().flatten() {
+                let grp_label = format!("{dom_name}/{grp_name}");
+                push(&mut out, grp_label.clone(), &grp.nginx, &grp.nginx_override);
+                for (svc_name, svc) in grp.services.iter().flatten() {
+                    push(
+                        &mut out,
+                        format!("{grp_label}/{svc_name}"),
+                        &svc.nginx,
+                        &svc.nginx_override,
+                    );
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Validate and set (or overwrite) one directive in an `nginx` map.
+fn set_nginx_entry(
+    map: &mut Option<BTreeMap<String, String>>,
+    name: &str,
+    value: &str,
+) -> Result<()> {
+    validate_nginx_directive(name, value)?;
+    map.get_or_insert_with(BTreeMap::new)
+        .insert(name.to_string(), value.to_string());
+    Ok(())
+}
+
+/// Remove one directive from an `nginx` map, dropping the map once it's empty so
+/// the config file doesn't keep an `"nginx": {}` behind.
+fn rm_nginx_entry(
+    map: &mut Option<BTreeMap<String, String>>,
+    name: &str,
+    owner: &str,
+) -> Result<()> {
+    let removed = map.as_mut().and_then(|m| m.remove(name));
+    if removed.is_none() {
+        return Err(anyhow!("{owner} has no nginx directive '{name}'."));
+    }
+    if map.as_ref().is_some_and(|m| m.is_empty()) {
+        *map = None;
+    }
+    Ok(())
 }
 
 /// Allowed values for a service's connection_type. Absent/None is treated as "http".
@@ -310,6 +527,22 @@ pub struct Domain {
         deserialize_with = "deserialize_nullable_override"
     )]
     pub connection_type_override: Option<Option<String>>,
+    /// nginx directives for this layer's services, rendered inside each vhost's
+    /// `location /` block. Resolved domain → group → service at deploy; see
+    /// [`resolve_nginx_directives`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_nginx_map"
+    )]
+    pub nginx: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*nginx",
+        deserialize_with = "deserialize_nginx_map_override"
+    )]
+    pub nginx_override: Option<Option<BTreeMap<String, String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -399,6 +632,22 @@ pub struct Group {
         deserialize_with = "deserialize_nullable_override"
     )]
     pub connection_type_override: Option<Option<String>>,
+    /// nginx directives for this layer's services, rendered inside each vhost's
+    /// `location /` block. Resolved domain → group → service at deploy; see
+    /// [`resolve_nginx_directives`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_nginx_map"
+    )]
+    pub nginx: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*nginx",
+        deserialize_with = "deserialize_nginx_map_override"
+    )]
+    pub nginx_override: Option<Option<BTreeMap<String, String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -507,6 +756,22 @@ pub struct Service {
         deserialize_with = "deserialize_nullable_override"
     )]
     pub connection_type_override: Option<Option<String>>,
+    /// nginx directives for this layer's services, rendered inside each vhost's
+    /// `location /` block. Resolved domain → group → service at deploy; see
+    /// [`resolve_nginx_directives`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_nginx_map"
+    )]
+    pub nginx: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "*nginx",
+        deserialize_with = "deserialize_nginx_map_override"
+    )]
+    pub nginx_override: Option<Option<BTreeMap<String, String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -3552,6 +3817,118 @@ impl Config {
 
         svc.connection_type = None;
         Ok(())
+    }
+
+    // nginx directives (global / domain / group / service)
+
+    pub fn set_global_nginx(&mut self, name: &str, value: &str) -> Result<()> {
+        set_nginx_entry(&mut self.nginx, name, value)
+    }
+
+    pub fn rm_global_nginx(&mut self, name: &str) -> Result<()> {
+        rm_nginx_entry(&mut self.nginx, name, "global config")
+    }
+
+    pub fn set_domain_nginx(&mut self, domain_name: &str, name: &str, value: &str) -> Result<()> {
+        let domain = self.domain_mut(domain_name)?;
+        set_nginx_entry(&mut domain.nginx, name, value)
+    }
+
+    pub fn rm_domain_nginx(&mut self, domain_name: &str, name: &str) -> Result<()> {
+        let domain = self.domain_mut(domain_name)?;
+        rm_nginx_entry(&mut domain.nginx, name, &format!("domain '{domain_name}'"))
+    }
+
+    pub fn set_group_nginx(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<()> {
+        let group = self
+            .domain_mut(domain_name)?
+            .groups
+            .get_or_insert_with(BTreeMap::new)
+            .entry(group_name.to_string())
+            .or_default();
+        set_nginx_entry(&mut group.nginx, name, value)
+    }
+
+    pub fn rm_group_nginx(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        name: &str,
+    ) -> Result<()> {
+        let group = self
+            .domain_mut(domain_name)?
+            .groups
+            .as_mut()
+            .and_then(|g| g.get_mut(group_name))
+            .ok_or_else(|| {
+                anyhow!(
+                    "group, {}, does not exist in domain {}",
+                    group_name,
+                    domain_name
+                )
+            })?;
+        rm_nginx_entry(
+            &mut group.nginx,
+            name,
+            &format!("group '{group_name}' in domain '{domain_name}'"),
+        )
+    }
+
+    pub fn set_service_nginx(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<()> {
+        let svc = self
+            .domain_mut(domain_name)?
+            .groups
+            .get_or_insert_with(BTreeMap::new)
+            .entry(group_name.to_string())
+            .or_default()
+            .services
+            .get_or_insert_with(BTreeMap::new)
+            .entry(service_name.to_string())
+            .or_default();
+        set_nginx_entry(&mut svc.nginx, name, value)
+    }
+
+    pub fn rm_service_nginx(
+        &mut self,
+        domain_name: &str,
+        group_name: &str,
+        service_name: &str,
+        name: &str,
+    ) -> Result<()> {
+        let svc = self
+            .domain_mut(domain_name)?
+            .groups
+            .as_mut()
+            .and_then(|g| g.get_mut(group_name))
+            .and_then(|g| g.services.as_mut())
+            .and_then(|s| s.get_mut(service_name))
+            .ok_or_else(|| anyhow!("service, {}, does not exist", service_name))?;
+        rm_nginx_entry(
+            &mut svc.nginx,
+            name,
+            &format!("service '{domain_name}.{service_name}'"),
+        )
+    }
+
+    fn domain_mut(&mut self, domain_name: &str) -> Result<&mut Domain> {
+        self.domains
+            .as_mut()
+            .ok_or_else(|| anyhow!("No domains configured"))?
+            .get_mut(domain_name)
+            .ok_or_else(|| anyhow!("domain, {}, does not exist", domain_name))
     }
 
     // Environment-level connection_type

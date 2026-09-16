@@ -5,6 +5,7 @@ use crate::config::DarpPaths;
 use anyhow::{Result, anyhow};
 use colored::*;
 use std::ffi::OsStr;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug)]
@@ -343,22 +344,12 @@ impl Engine {
             .arg("--name")
             .arg(REVERSE_PROXY)
             .arg("-p")
-            .arg("80:80")
-            .arg("-v")
-            .arg(format!(
-                "{}:/etc/nginx/nginx.conf",
-                paths.nginx_conf_path.display()
-            ))
-            .arg("-v")
-            .arg(format!(
-                "{}:/etc/nginx/http.d/vhost_container.conf",
-                paths.vhost_container_conf.display()
-            ));
-
-        if self.is_docker() {
-            cmd.arg("--add-host")
-                .arg("host.docker.internal:host-gateway");
-        }
+            .arg("80:80");
+        self.add_reverse_proxy_args(
+            &mut cmd,
+            &paths.nginx_conf_path,
+            &paths.vhost_container_conf,
+        );
 
         cmd.arg("nginx:alpine")
             .stdout(Stdio::null())
@@ -366,6 +357,55 @@ impl Engine {
             .spawn()?;
 
         Ok(())
+    }
+
+    /// Mount the nginx configs the reverse proxy runs with, and let it resolve the
+    /// host gateway name its vhosts proxy to. Shared by the real proxy and the
+    /// `nginx -t` preflight so the check sees exactly what the proxy will.
+    fn add_reverse_proxy_args(&self, cmd: &mut Command, nginx_conf: &Path, vhost_conf: &Path) {
+        cmd.arg("-v")
+            .arg(format!("{}:/etc/nginx/nginx.conf", nginx_conf.display()))
+            .arg("-v")
+            .arg(format!(
+                "{}:/etc/nginx/http.d/vhost_container.conf",
+                vhost_conf.display()
+            ));
+
+        if self.is_docker() {
+            cmd.arg("--add-host")
+                .arg("host.docker.internal:host-gateway");
+        }
+    }
+
+    /// Run `nginx -t` against candidate configs in a throwaway `nginx:alpine`
+    /// container. On failure the error carries nginx's own output.
+    pub fn test_nginx_config(&self, nginx_conf: &Path, vhost_conf: &Path) -> Result<()> {
+        let Some(bin) = self.bin else { return Ok(()) };
+
+        let mut cmd = Command::new(bin);
+        cmd.arg("run").arg("--rm");
+        self.add_reverse_proxy_args(&mut cmd, nginx_conf, vhost_conf);
+        let output = cmd
+            .arg("nginx:alpine")
+            .arg("nginx")
+            .arg("-t")
+            .output()
+            .map_err(|e| anyhow!("failed to run nginx config check: {}", e))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // nginx prints each error twice: once to its error log (on stderr in the
+        // container, prefixed "2026/09/16 18:25:54 [emerg] 1#1: ...") and once as
+        // "nginx: [emerg] ...". Keep the second form.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let lines: Vec<&str> = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !is_nginx_log_line(l))
+            .collect();
+        Err(anyhow!("{}", lines.join("\n")))
     }
 
     pub fn restart_reverse_proxy(&self, paths: &DarpPaths) -> Result<()> {
@@ -511,4 +551,18 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// True for nginx error-log lines, which start with a `YYYY/MM/DD HH:MM:SS` stamp.
+fn is_nginx_log_line(line: &str) -> bool {
+    let b = line.as_bytes();
+    b.len() >= 19
+        && b[4] == b'/'
+        && b[7] == b'/'
+        && b[10] == b' '
+        && b[13] == b':'
+        && b[16] == b':'
+        && [0..4, 5..7, 8..10, 11..13, 14..16, 17..19]
+            .into_iter()
+            .all(|r| b[r].iter().all(u8::is_ascii_digit))
 }

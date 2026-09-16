@@ -10,7 +10,7 @@ pub use deploy::{
     HostnameSource, PlannedService, UnresolvedAlias, build_container_hosts, build_host_proxy_vhost,
     build_hosts_lines, build_portmap, build_vhost_container_conf, cmd_deploy,
     collect_unresolved_aliases, detect_hostname_collisions, plan_deployment,
-    render_unresolved_alias_warning, validate_plan_aliases,
+    render_unresolved_alias_warning, validate_nginx_directives, validate_plan_aliases,
 };
 pub use doctor::{cmd_check_image, cmd_doctor};
 pub use run::{

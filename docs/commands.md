@@ -146,6 +146,7 @@ Set scalar values on various config levels.
 darp config set engine docker
 darp config set podman-machine my-machine
 darp config set urls-in-hosts true
+darp config set nginx client_max_body_size 100m   # any nginx directive; see configuration.md
 
 # Environment level
 darp config set env serve-command go 'air'
@@ -158,19 +159,19 @@ darp config set env platform go 'linux/amd64'
 darp config set dom default-environment my-domain go
 darp config set dom serve-command -l ~/projects my-domain 'npm start'
 darp config set dom image-repository my-domain 'registry.example.com/node'
-# Also: shell-command, platform, default-container-image
+# Also: shell-command, platform, default-container-image, connection-type, nginx
 
 # Group level
 darp config set grp default-environment my-domain laravel 'lara:13'
 darp config set grp serve-command my-domain go 'air'
-# Also: shell-command, image-repository, platform, default-container-image
+# Also: shell-command, image-repository, platform, default-container-image, connection-type, nginx
 
 # Service level (use -g for non-default group)
 darp config set svc serve-command my-domain my-service 'npm start'
 darp config set svc serve-command -g laravel my-domain admin 'php artisan serve'
 darp config set svc default-environment my-domain my-service go
 darp config set svc default-environment -g laravel my-domain admin 'lara:13'
-# Also: shell-command, image-repository, platform, default-container-image
+# Also: shell-command, image-repository, platform, default-container-image, connection-type, nginx
 ```
 
 ### `darp config add`
@@ -231,6 +232,10 @@ darp config rm svc default-environment -g laravel my-domain admin
 darp config rm env portmap go 2345
 darp config rm svc variable my-domain my-service API_KEY
 darp config rm env volume go /root/.ssh '{home}/.ssh'
+
+# nginx directives (global, dom, grp, svc)
+darp config rm nginx client_max_body_size
+darp config rm svc nginx my-domain . my-service proxy_read_timeout
 
 # Also: podman-machine
 darp config rm podman-machine

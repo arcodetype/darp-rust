@@ -2,6 +2,7 @@ use crate::alias::{self, AliasValidationError};
 use crate::config::{self, Config, DarpPaths, Domain};
 use crate::engine::{self, Engine};
 use crate::os::OsIntegration;
+use std::collections::BTreeMap;
 
 /// Build the contents of `~/.darp/hosts_container` — loopback + host-gateway +
 /// one `0.0.0.0 <url>` line per configured service URL.
@@ -118,7 +119,17 @@ fn resolve_deploy_urls(domain: &Domain, group_name: &str, service_name: &str) ->
 /// clients (`ws://{svc}.{dom}.test`, and Vite HMR arriving on an alias hostname)
 /// reach the upstream. The `$connection_upgrade` variable is defined in
 /// `assets/nginx.conf`.
-pub fn build_host_proxy_vhost(url: &str, host_gateway: &str, port: u16) -> String {
+///
+/// `directives` (the service's resolved `nginx` map) are rendered inside
+/// `location /`, after darp's own lines, so they apply to every path on the host —
+/// a server-level `proxy_set_header` would be silently ignored because the location
+/// sets its own. They must already be validated; values are spliced in verbatim.
+pub fn build_host_proxy_vhost(
+    url: &str,
+    host_gateway: &str,
+    port: u16,
+    directives: &BTreeMap<String, String>,
+) -> String {
     const TEMPLATE: &str = r#"server {
     listen 80;
     server_name {url};
@@ -128,14 +139,81 @@ pub fn build_host_proxy_vhost(url: &str, host_gateway: &str, port: u16) -> Strin
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-    }
+{directives}    }
 }
 "#;
 
+    let directives: String = directives
+        .iter()
+        .map(|(name, value)| format!("        {name} {value};\n"))
+        .collect();
+
     TEMPLATE
+        .replace("{directives}", &directives)
         .replace("{url}", url)
         .replace("{host_gateway}", host_gateway)
         .replace("{port}", &port.to_string())
+}
+
+/// Statically check the global and every resolved per-service `nginx` directive
+/// before anything is written, reporting all problems together like alias
+/// validation. This guarantees each entry renders as one well-formed line;
+/// [`preflight_nginx_config`] then lets nginx itself judge the result.
+pub fn validate_nginx_directives(
+    config: &Config,
+    services: &[PlannedService],
+) -> anyhow::Result<()> {
+    let mut problems = Vec::new();
+    for (name, value) in config.nginx.iter().flatten() {
+        if let Err(e) = config::validate_nginx_directive(name, value) {
+            problems.push(format!("  global: {e}"));
+        }
+    }
+    for svc in services {
+        for (name, value) in &svc.nginx {
+            if let Err(e) = config::validate_nginx_directive(name, value) {
+                problems.push(format!("  {}: {e}", svc.label()));
+            }
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Cannot deploy because some nginx settings are not valid:\n\n{}\n\nNo deployment artifacts were changed.",
+            problems.join("\n")
+        )
+    }
+}
+
+/// Run `nginx -t` on the configs this deploy is about to install, before any of
+/// them replace the live ones. Candidates are staged under `$DARP_ROOT` rather
+/// than the system temp dir because podman machine only shares the home folder
+/// with its VM.
+fn preflight_nginx_config(
+    paths: &DarpPaths,
+    engine: &Engine,
+    nginx_conf: &str,
+    vhost_conf: &str,
+) -> anyhow::Result<()> {
+    let staging = paths._darp_root.join(".nginx-check");
+    std::fs::create_dir_all(&staging)?;
+    let staged_nginx = staging.join("nginx.conf");
+    let staged_vhost = staging.join("vhost_container.conf");
+
+    let result = std::fs::write(&staged_nginx, nginx_conf)
+        .and_then(|_| std::fs::write(&staged_vhost, vhost_conf))
+        .map_err(anyhow::Error::from)
+        .and_then(|_| engine.test_nginx_config(&staged_nginx, &staged_vhost));
+    let _ = std::fs::remove_dir_all(&staging);
+
+    result.map_err(|e| {
+        anyhow::anyhow!(
+            "Cannot deploy because nginx rejected the generated configuration:\n\n{e}\n\n\
+             Check the `nginx` settings in your config (global, domain, group, or service).\n\
+             \nNo deployment artifacts were changed."
+        )
+    })
 }
 
 /// One service discovered on disk, carrying everything the artifact writers need.
@@ -155,6 +233,9 @@ pub struct PlannedService {
     /// Raw config values until [`validate_plan_aliases`] replaces them with
     /// normalized, deduplicated hostnames.
     pub aliases: Vec<String>,
+    /// nginx directives for this service's vhosts, resolved domain → group → service.
+    /// Empty leaves the global `http` values from `nginx.conf` in effect.
+    pub nginx: BTreeMap<String, String>,
 }
 
 impl PlannedService {
@@ -269,6 +350,16 @@ pub fn plan_deployment(paths: &DarpPaths, config: &Config) -> anyhow::Result<Vec
                     ),
                     // Extra hostnames that should reach this same service.
                     aliases: resolve_deploy_urls(domain, group_name, folder_name),
+                    nginx: {
+                        let group = groups.and_then(|g| g.get(group_name));
+                        config::resolve_nginx_directives(
+                            domain,
+                            group,
+                            group
+                                .and_then(|g| g.services.as_ref())
+                                .and_then(|s| s.get(folder_name)),
+                        )
+                    },
                 });
             };
 
@@ -578,6 +669,7 @@ pub fn build_vhost_container_conf(services: &[PlannedService], host_gateway: &st
                 &hostname,
                 host_gateway,
                 svc.proxy_port,
+                &svc.nginx,
             ));
         }
     }
@@ -685,6 +777,15 @@ pub fn cmd_deploy(
     let mut services = plan_deployment(paths, config)?;
     validate_plan_aliases(&mut services)?;
     detect_hostname_collisions(&services)?;
+    validate_nginx_directives(config, &services)?;
+
+    let nginx_conf = crate::os::render_nginx_conf(config.nginx.as_ref())?;
+    let vhost_conf = build_vhost_container_conf(&services, host_gateway);
+    // Without user `nginx` settings the config is entirely darp-generated (aliases
+    // are validated above), so the container run would only cost time.
+    if !config.nginx_maps().is_empty() {
+        preflight_nginx_config(paths, engine, &nginx_conf, &vhost_conf)?;
+    }
 
     // Collected here, reported at the end of the run so it isn't scrolled off by the
     // debug-port table and the container restarts.
@@ -695,7 +796,7 @@ pub fn cmd_deploy(
 
     // Refresh the embedded nginx.conf on every deploy so fixes to assets/nginx.conf
     // reach the reverse-proxy without a separate `darp install`.
-    os.copy_nginx_conf()?;
+    os.copy_nginx_conf(config.nginx.as_ref())?;
 
     let gateway_ip =
         match engine::read_container_host_ip(&paths.container_host_ip_path, &engine.kind) {
@@ -715,10 +816,7 @@ pub fn cmd_deploy(
         .unwrap_or_default();
     let portmap = build_portmap(&services, &domain_names);
 
-    std::fs::write(
-        &paths.vhost_container_conf,
-        build_vhost_container_conf(&services, host_gateway),
-    )?;
+    std::fs::write(&paths.vhost_container_conf, &vhost_conf)?;
     let hosts_content =
         build_container_hosts(&gateway_ip, engine.host_gateway(), &hosts_container_lines);
     std::fs::write(&paths.hosts_container_path, hosts_content)?;

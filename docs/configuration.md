@@ -115,6 +115,7 @@ Additionally:
 | `default_environment` | Domain, Group, Service | Fallback environment when `-e` isn't passed |
 | `location` | Domain | Filesystem path to the domain folder |
 | `urls` | Service | Extra hostnames that reach this service alongside `{service}.{domain}.test` |
+| `nginx` | Global, Domain, Group, Service | Map of nginx directives, e.g. `client_max_body_size`, `proxy_read_timeout`. See [nginx Settings](#nginx-settings) |
 
 ## URL Aliases
 
@@ -249,6 +250,86 @@ Invalid:
   "local.zoo.org/path"
 ]
 ```
+
+## nginx Settings
+
+darp generates `~/.darp/nginx.conf` and `~/.darp/vhost_container.conf` on every
+`darp deploy`, so editing them by hand doesn't last. Set nginx directives in an
+`nginx` map instead:
+
+```json
+{
+  "nginx": { "client_max_body_size": "100m" },
+  "domains": {
+    "my-domain": {
+      "location": "{home}/projects",
+      "nginx": { "proxy_read_timeout": "300s" },
+      "groups": {
+        ".": {
+          "services": {
+            "uploader": { "nginx": { "client_max_body_size": 0 } },
+            "events": { "nginx": { "proxy_buffering": "off" } }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+```sh
+darp config set nginx client_max_body_size 100m
+darp config set dom nginx my-domain proxy_read_timeout 300s
+darp config set svc nginx my-domain . uploader client_max_body_size 0
+darp config rm svc nginx my-domain . uploader client_max_body_size
+darp deploy
+```
+
+### Where directives go
+
+- **Global** directives go in the `http` block of `nginx.conf` and apply to every
+  service. If darp already sets that directive (for example
+  `client_max_body_size 1m` or `server_tokens off`), yours replaces darp's value.
+- **Domain, group, and service** directives go inside the `location /` block of
+  that service's vhosts, for its canonical hostname and every `urls` alias. They
+  override the global value. Maps merge down the chain, with service beating group
+  beating domain. `*nginx` replaces the inherited map, and `"*nginx": null` clears
+  it. Environments don't apply, because vhosts are written at deploy time.
+
+### Values
+
+- Each entry is one directive: `"proxy_read_timeout": "300s"` becomes
+  `proxy_read_timeout 300s;`. Values can contain spaces
+  (`"large_client_header_buffers": "4 16k"`) but not `;`, `{`, `}`, `#`, or line
+  breaks.
+- Values are strings. Bare JSON numbers are also accepted
+  (`"client_max_body_size": 0`).
+- Size directives (`client_max_body_size`, `client_body_buffer_size`,
+  `proxy_buffer_size`, `proxy_busy_buffers_size`) need a `k`, `m`, or `g` unit,
+  or `0`. nginx reads a bare number as bytes, so `50` would mean 50 bytes, not 50
+  megabytes.
+- darp manages `listen`, `server_name`, `location`, `proxy_pass`, and `include`
+  itself, so they can't be set. Block directives (`server`, `map`, `upstream`,
+  `if`, ...) can't be expressed as one line.
+- A map holds one value per directive name, so directives that nginx allows more
+  than once (such as several `add_header` lines) can only be set once.
+
+### Deploy check
+
+Before replacing anything, `darp deploy` runs `nginx -t` on the new configuration
+in a throwaway `nginx:alpine` container. An unknown directive, a bad value, or a
+directive that isn't allowed where darp puts it stops the deploy with nginx's
+error message, and the running deployment is left untouched.
+
+### Common settings
+
+| Problem | Directive |
+|---|---|
+| Uploads fail with `413 Request Entity Too Large` | `client_max_body_size` (e.g. `100m`, or `0` for no limit) |
+| `504 Gateway Timeout` while paused at a debugger breakpoint, or HMR websockets reconnecting every minute | `proxy_read_timeout` / `proxy_send_timeout` (e.g. `3600s`) |
+| Server-Sent Events or streamed responses arrive all at once | `proxy_buffering off` |
+| `502` with "upstream sent too big header" in the proxy logs | `proxy_buffer_size` (e.g. `16k`) |
+| `400 Request Header Or Cookie Too Large` | `large_client_header_buffers` (e.g. `4 16k`, global) |
 
 ## Viewing Resolved Config
 

@@ -1,12 +1,64 @@
-use crate::config::{Config, DarpPaths};
+use crate::config::{self, Config, DarpPaths};
 use crate::engine::EngineKind;
 use anyhow::{Result, anyhow};
 use colored::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 const NGINX_CONF: &str = include_str!("../../assets/nginx.conf");
+
+/// darp's single-value `http` directives, in the order they appear in `nginx.conf`.
+/// The global `nginx` map replaces any of these by name (so nginx never sees a
+/// duplicate) and appends names not listed here.
+pub const DEFAULT_HTTP_DIRECTIVES: &[(&str, &str)] = &[
+    // Type for responses whose extension isn't in mime.types.
+    ("default_type", "application/octet-stream"),
+    // Don't tell nginx version to the clients. Default is 'on'.
+    ("server_tokens", "off"),
+    // Maximum accepted request body; larger requests get 413. 0 disables the check.
+    ("client_max_body_size", "1m"),
+    // Copy data between FDs within the kernel. Default is off.
+    ("sendfile", "on"),
+    // Send the response head in one packet. Default is 'off'.
+    ("tcp_nopush", "on"),
+    // Room for long alias hostnames and many vhosts.
+    ("server_names_hash_bucket_size", "128"),
+    ("server_names_hash_max_size", "512"),
+    ("ssl_protocols", "TLSv1.1 TLSv1.2 TLSv1.3"),
+    ("ssl_prefer_server_ciphers", "on"),
+    ("ssl_session_cache", "shared:SSL:2m"),
+    ("ssl_session_timeout", "1h"),
+    // TLS session tickets are insecure. Default is 'on'.
+    ("ssl_session_tickets", "off"),
+    // Set the Vary HTTP header as defined in RFC 2616. Default is 'off'.
+    ("gzip_vary", "on"),
+];
+
+/// Render the embedded `nginx.conf`, merging the global `nginx` map over
+/// [`DEFAULT_HTTP_DIRECTIVES`]. Every override is validated first, because values
+/// are spliced in verbatim.
+pub fn render_nginx_conf(overrides: Option<&BTreeMap<String, String>>) -> Result<String> {
+    let empty = BTreeMap::new();
+    let overrides = overrides.unwrap_or(&empty);
+    for (name, value) in overrides {
+        config::validate_nginx_directive(name, value)?;
+    }
+
+    let mut lines = Vec::new();
+    for (name, default) in DEFAULT_HTTP_DIRECTIVES {
+        let value = overrides.get(*name).map_or(*default, String::as_str);
+        lines.push(format!("        {name} {value};"));
+    }
+    for (name, value) in overrides {
+        if !DEFAULT_HTTP_DIRECTIVES.iter().any(|(d, _)| d == name) {
+            lines.push(format!("        {name} {value};"));
+        }
+    }
+
+    Ok(NGINX_CONF.replace("{http_directives}", &lines.join("\n")))
+}
 
 pub const HOSTS_HEADER: &str = "# --- DARP HOSTS START ---";
 pub const HOSTS_FOOTER: &str = "# --- DARP HOSTS END ---";
@@ -115,13 +167,14 @@ impl<'a> OsIntegration<'a> {
         Ok(())
     }
 
-    pub fn copy_nginx_conf(&self) -> Result<()> {
-        // Write embedded nginx.conf to $DARP_ROOT/nginx.conf
+    pub fn copy_nginx_conf(&self, overrides: Option<&BTreeMap<String, String>>) -> Result<()> {
+        // Render embedded nginx.conf to $DARP_ROOT/nginx.conf
+        let rendered = render_nginx_conf(overrides)?;
         if let Some(parent) = self.paths.nginx_conf_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&self.paths.nginx_conf_path, NGINX_CONF)?;
+        fs::write(&self.paths.nginx_conf_path, rendered)?;
         println!(
             "nginx.conf written to {}",
             self.paths.nginx_conf_path.display()

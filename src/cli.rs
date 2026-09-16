@@ -151,6 +151,13 @@ pub enum SetCommand {
     UrlsInHosts { value: String },
     /// Enable/disable WSL mode (syncs Windows hosts file and adds doctor checks)
     Wsl { value: String },
+    /// Set a global nginx directive (http block, applies to every service)
+    Nginx {
+        /// nginx directive name (e.g. client_max_body_size, proxy_read_timeout)
+        directive: String,
+        /// Directive value (e.g. 50m, 300s, off); quote values with spaces
+        value: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -211,6 +218,17 @@ pub enum SetDomCommand {
         domain_name: String,
         /// One of: http, websocket, tcp
         connection_type: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
+    /// Set an nginx directive for services under a domain (overrides the global value)
+    Nginx {
+        domain_name: String,
+        /// nginx directive name (e.g. client_max_body_size, proxy_read_timeout)
+        directive: String,
+        /// Directive value (e.g. 50m, 300s, off); quote values with spaces
+        value: String,
         /// Create the domain at this path if it doesn't exist
         #[arg(short = 'l', long)]
         location: Option<String>,
@@ -279,6 +297,18 @@ pub enum SetGrpCommand {
         group_name: String,
         /// One of: http, websocket, tcp
         connection_type: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
+    /// Set an nginx directive for services in a group
+    Nginx {
+        domain_name: String,
+        group_name: String,
+        /// nginx directive name (e.g. client_max_body_size, proxy_read_timeout)
+        directive: String,
+        /// Directive value (e.g. 50m, 300s, off); quote values with spaces
+        value: String,
         /// Create the domain at this path if it doesn't exist
         #[arg(short = 'l', long)]
         location: Option<String>,
@@ -392,6 +422,19 @@ pub enum SetSvcCommand {
         service_name: String,
         /// One of: http, websocket, tcp
         connection_type: String,
+        /// Create the domain at this path if it doesn't exist
+        #[arg(short = 'l', long)]
+        location: Option<String>,
+    },
+    /// Set an nginx directive for one service's hostnames
+    Nginx {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+        /// nginx directive name (e.g. client_max_body_size, proxy_read_timeout)
+        directive: String,
+        /// Directive value (e.g. 50m, 300s, off); quote values with spaces
+        value: String,
         /// Create the domain at this path if it doesn't exist
         #[arg(short = 'l', long)]
         location: Option<String>,
@@ -577,6 +620,8 @@ pub enum RmCommand {
     },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
+    /// Remove a global nginx directive (back to darp's default, if it has one)
+    Nginx { directive: String },
     /// Remove domain-level configuration
     Dom {
         #[command(subcommand)]
@@ -631,6 +676,11 @@ pub enum RmDomCommand {
     DefaultContainerImage { domain_name: String },
     /// Remove connection_type override from a domain
     ConnectionType { domain_name: String },
+    /// Remove an nginx directive from a domain
+    Nginx {
+        domain_name: String,
+        directive: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -688,6 +738,12 @@ pub enum RmGrpCommand {
     ConnectionType {
         domain_name: String,
         group_name: String,
+    },
+    /// Remove an nginx directive from a group
+    Nginx {
+        domain_name: String,
+        group_name: String,
+        directive: String,
     },
 }
 
@@ -785,5 +841,12 @@ pub enum RmSvcCommand {
         domain_name: String,
         group_name: String,
         service_name: String,
+    },
+    /// Remove an nginx directive from a service
+    Nginx {
+        domain_name: String,
+        group_name: String,
+        service_name: String,
+        directive: String,
     },
 }
