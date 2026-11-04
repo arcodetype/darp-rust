@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::commands::completions::{RC_START_MARKER, detect_shell};
 use crate::config::{self, Config, DarpPaths, ResolvedSettings};
 use crate::engine::{self, Engine};
+use crate::os;
 
 enum CheckResult {
     Ok(String),
@@ -163,6 +164,7 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
     }
 
     // 3. DNS resolver
+    let dns_port = config.custom_dns_port();
     {
         let mut s = DoctorSection::new("DNS resolver");
         let resolver_path = Path::new("/etc/resolver/test");
@@ -170,11 +172,24 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
         if resolver_path.exists() {
             s.ok("/etc/resolver/test exists");
             match fs::read_to_string(resolver_path) {
-                Ok(contents) if contents.contains("nameserver 127.0.0.1") => {
-                    s.ok("Contains: nameserver 127.0.0.1");
-                }
-                Ok(_) => {
-                    s.warn("/etc/resolver/test has unexpected content");
+                Ok(contents) => {
+                    if contents.contains("nameserver 127.0.0.1") {
+                        s.ok("Contains: nameserver 127.0.0.1");
+                    } else {
+                        s.warn("/etc/resolver/test has unexpected content");
+                    }
+                    match (dns_port, os::resolver_conf_port(&contents)) {
+                        (Some(want), Some(found)) if want == found => {
+                            s.ok(&format!("Contains: port {want} (dns_port)"));
+                        }
+                        (Some(want), _) => s.warn(&format!(
+                            "dns_port is {want} but /etc/resolver/test does not name port {want} — run 'darp deploy'"
+                        )),
+                        (None, Some(found)) => s.warn(&format!(
+                            "/etc/resolver/test names port {found} but dns_port is not set — run 'darp deploy'"
+                        )),
+                        (None, None) => {}
+                    }
                 }
                 Err(_) => {
                     s.warn("/etc/resolver/test cannot be read (may need sudo)");
@@ -202,7 +217,17 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
             }
 
             if engine.is_container_running("darp-masq") {
-                s.ok("darp-masq is running");
+                let bindings = engine.container_port_bindings("darp-masq");
+                if !engine::darp_masq_ports_match(&bindings, dns_port) {
+                    s.warn(&format!(
+                        "darp-masq is running but not published on {} — run 'darp deploy'",
+                        engine::darp_masq_bind_label(dns_port)
+                    ));
+                } else if let Some(port) = dns_port {
+                    s.ok(&format!("darp-masq is running on 127.0.0.1:{port}"));
+                } else {
+                    s.ok("darp-masq is running");
+                }
             } else {
                 s.warn("darp-masq is not running — run 'darp deploy'");
             }

@@ -91,6 +91,9 @@ pub fn substitute_tokens(input: &str, ctx: &TokenCtx) -> String {
 /// Overridable per team via `Config.debug_port_base`.
 pub const DEBUG_PORT_BASE: u16 = 13000;
 
+/// Host port darp-masq's DNS server is published on when `Config.dns_port` is unset.
+pub const DEFAULT_DNS_PORT: u16 = 53;
+
 /// Well-known host ports that debug-port assignment must never hand out, so a debug
 /// listener can't clash with a conventional local service. Mostly relevant if the
 /// base is lowered or the assigned range grows into these; harmless otherwise.
@@ -232,6 +235,11 @@ pub struct Config {
     /// Defaults to `DEBUG_PORT_BASE` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug_port_base: Option<u16>,
+    /// Host port darp-masq's DNS server is published on, bound to 127.0.0.1, for
+    /// machines where something else holds port 53. Unset (or 53) keeps darp's
+    /// default of port 53 on every interface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_port: Option<u16>,
     /// Global nginx directives, written into the `http` block of the generated
     /// `nginx.conf`. A directive darp already sets there is replaced, not repeated.
     #[serde(
@@ -1299,6 +1307,12 @@ impl Config {
                     .unwrap_or(false)
             })
             .map(|(name, domain)| (name.as_str(), domain))
+    }
+
+    /// The host port darp-masq is moved to, or `None` when darp's default applies.
+    /// A `dns_port` of 53 is the default, so it returns `None` too.
+    pub fn custom_dns_port(&self) -> Option<u16> {
+        self.dns_port.filter(|port| *port != DEFAULT_DNS_PORT)
     }
 
     pub fn parse_bool(&self, s: &str) -> Result<bool> {
