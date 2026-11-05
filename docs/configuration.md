@@ -116,6 +116,7 @@ Additionally:
 | `location` | Domain | Filesystem path to the domain folder |
 | `urls` | Service | Extra hostnames that reach this service alongside `{service}.{domain}.test` |
 | `nginx` | Global, Domain, Group, Service | Map of nginx directives, e.g. `client_max_body_size`, `proxy_read_timeout`. See [nginx Settings](#nginx-settings) |
+| `dns_port` | Global | Host port darp's DNS server listens on, when something else holds 53. See [DNS Port](#dns-port) |
 
 ## URL Aliases
 
@@ -330,6 +331,36 @@ error message, and the running deployment is left untouched.
 | Server-Sent Events or streamed responses arrive all at once | `proxy_buffering off` |
 | `502` with "upstream sent too big header" in the proxy logs | `proxy_buffer_size` (e.g. `16k`) |
 | `400 Request Header Or Cookie Too Large` | `large_client_header_buffers` (e.g. `4 16k`, global) |
+
+## DNS Port
+
+`.test` names resolve through `darp-masq`, a dnsmasq container that darp publishes
+on host port 53, and `/etc/resolver/test`, which sends `.test` lookups to
+`127.0.0.1`. When something else needs port 53 on your machine — a VPN client's DNS
+proxy, for example — move darp-masq to another port:
+
+```sh
+darp config set dns-port 5300
+darp deploy
+```
+
+`darp deploy` then publishes darp-masq on `127.0.0.1:5300` only (dnsmasq still
+listens on 53 inside the container), replacing a darp-masq published anywhere else,
+and adds `port 5300` to `/etc/resolver/test`, which needs sudo. `darp install`
+writes the same resolver file. Both settle on the configured port on every run,
+so a reinstall or redeploy keeps it. Only macOS reads that `port` line
+(resolver(5)); Linux never reads `/etc/resolver/test`, so no host lookup reaches a
+moved darp-masq there — use `darp config set urls-in-hosts true` instead.
+
+`darp config rm dns-port` and another `darp deploy` put both back on port 53.
+Unset, or set to `53`, darp-masq is published on port 53 on every interface.
+Deploy then leaves a darp-masq already on 53 alone and replaces one published on
+any other port, and it rewrites `/etc/resolver/test` (sudo) only when the file has
+a `port` line, removing it. That holds for a darp-masq or `port` line set up by
+hand, too, so set `dns-port` before deploying on a machine that moved darp-masq
+itself. If darp-masq can't start — its port is already taken — or the resolver
+file can't be written, deploy prints a warning and carries on. `darp doctor` warns
+when either one doesn't match the setting.
 
 ## Viewing Resolved Config
 

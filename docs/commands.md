@@ -146,6 +146,7 @@ Set scalar values on various config levels.
 darp config set engine docker
 darp config set podman-machine my-machine
 darp config set urls-in-hosts true
+darp config set dns-port 5300                     # when something else holds port 53; see configuration.md
 darp config set nginx client_max_body_size 100m   # any nginx directive; see configuration.md
 
 # Environment level
@@ -237,6 +238,7 @@ darp config rm env volume go /root/.ssh '{home}/.ssh'
 darp config rm nginx client_max_body_size
 darp config rm svc nginx my-domain . my-service proxy_read_timeout
 
-# Also: podman-machine
+# Also: podman-machine, dns-port
 darp config rm podman-machine
+darp config rm dns-port
 ```

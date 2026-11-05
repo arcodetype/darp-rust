@@ -428,12 +428,53 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_darp_masq(&self, paths: &DarpPaths) -> Result<()> {
+    /// `{engine} port <name>` output, or an empty string when it can't be read.
+    pub fn container_port_bindings(&self, name: &str) -> String {
+        let Some(bin) = self.bin else {
+            return String::new();
+        };
+        match Command::new(bin).arg("port").arg(name).output() {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+            _ => String::new(),
+        }
+    }
+
+    /// Force-remove a container and wait until it is gone, so its name can be reused
+    /// straight away. A container that doesn't exist is not an error.
+    fn remove_container(&self, name: &str) -> Result<()> {
+        let Some(bin) = self.bin else { return Ok(()) };
+        Command::new(bin)
+            .arg("rm")
+            .arg("-f")
+            .arg(name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(())
+    }
+
+    /// Start darp-masq published where `dns_port` says ([`darp_masq_publish_args`]).
+    /// A running darp-masq is left alone unless it is published somewhere else, in
+    /// which case it is replaced. A start the engine rejects — a port already taken —
+    /// prints [`darp_masq_start_warning`] instead of failing, so the rest of deploy
+    /// still runs.
+    pub fn start_darp_masq(&self, paths: &DarpPaths, dns_port: Option<u16>) -> Result<()> {
         let Some(bin) = self.bin else { return Ok(()) };
         const DNSMASQ: &str = "darp-masq";
 
         if self.is_container_running(DNSMASQ) {
-            return Ok(());
+            if darp_masq_ports_match(&self.container_port_bindings(DNSMASQ), dns_port) {
+                return Ok(());
+            }
+            println!(
+                "moving {} to {}",
+                DNSMASQ.green(),
+                darp_masq_bind_label(dns_port)
+            );
+            self.remove_container(DNSMASQ)?;
+        } else if dns_port.is_some() {
+            // A stopped darp-masq created by hand without --rm would hold the name.
+            self.remove_container(DNSMASQ)?;
         }
 
         println!("starting {}", DNSMASQ.green());
@@ -443,12 +484,11 @@ impl Engine {
             .arg("-d")
             .arg("--rm")
             .arg("--name")
-            .arg(DNSMASQ)
-            .arg("-p")
-            .arg("53:53/udp")
-            .arg("-p")
-            .arg("53:53/tcp")
-            .arg("-v")
+            .arg(DNSMASQ);
+        for publish in darp_masq_publish_args(dns_port) {
+            cmd.arg("-p").arg(publish);
+        }
+        cmd.arg("-v")
             .arg(format!("{}:/etc/dnsmasq.d", paths.dnsmasq_dir.display()))
             .arg("--cap-add=NET_ADMIN");
 
@@ -457,10 +497,13 @@ impl Engine {
                 .arg("host.docker.internal:host-gateway");
         }
 
-        cmd.arg("dockurr/dnsmasq")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let output = cmd.arg("dockurr/dnsmasq").output()?;
+        if !output.status.success() {
+            eprintln!(
+                "\n{}",
+                darp_masq_start_warning(&String::from_utf8_lossy(&output.stderr), dns_port)
+            );
+        }
         Ok(())
     }
 
@@ -550,6 +593,83 @@ impl Engine {
             // For now we leave it as a no-op stub.
         }
         Ok(())
+    }
+}
+
+/// darp-masq's `-p` values: darp's default `53:53` on every interface, or
+/// `127.0.0.1:{port}:53` once `dns_port` moves it. dnsmasq listens on 53 inside the
+/// container either way.
+pub fn darp_masq_publish_args(dns_port: Option<u16>) -> Vec<String> {
+    let host = match dns_port {
+        Some(port) => format!("127.0.0.1:{port}"),
+        None => "53".to_string(),
+    };
+    ["udp", "tcp"]
+        .iter()
+        .map(|proto| format!("{host}:53/{proto}"))
+        .collect()
+}
+
+/// Where darp-masq is published, as printed by deploy and doctor.
+pub fn darp_masq_bind_label(dns_port: Option<u16>) -> String {
+    match dns_port {
+        Some(port) => format!("127.0.0.1:{port}"),
+        None => "port 53".to_string(),
+    }
+}
+
+/// The warning deploy prints when the engine refuses to start darp-masq, carrying the
+/// engine's own error. A failed publish on port 53 also names `dns-port`, since the
+/// usual cause is another program holding 53.
+pub fn darp_masq_start_warning(stderr: &str, dns_port: Option<u16>) -> String {
+    let mut msg = format!(
+        "Warning: darp-masq did not start on {}, so .test names that aren't in /etc/hosts won't resolve:\n",
+        darp_masq_bind_label(dns_port)
+    );
+    let error = stderr.trim();
+    if error.is_empty() {
+        msg.push_str("  (no error output from the container engine)\n");
+    } else {
+        for line in error.lines() {
+            msg.push_str(&format!("  {line}\n"));
+        }
+    }
+    if dns_port.is_none() {
+        msg.push_str(
+            "\nIf another program holds port 53 (a VPN's DNS proxy, for example), move darp's\n\
+             DNS server off it, then re-run 'darp deploy':\n\
+             \n  darp config set dns-port <port>\n",
+        );
+    }
+    msg.trim_end().to_string()
+}
+
+/// Whether `{engine} port darp-masq` output (`53/udp -> 0.0.0.0:53` lines) shows it
+/// published where `dns_port` wants it. A custom port needs exactly UDP and TCP on
+/// `127.0.0.1:{port}`. The default needs every binding on host port 53: a darp-masq
+/// on 53, or one whose bindings can't be read, is left running, while one published
+/// on any other port — moved there by `dns_port` or by hand — is replaced.
+pub fn darp_masq_ports_match(port_output: &str, dns_port: Option<u16>) -> bool {
+    let bindings: Vec<(&str, &str)> = port_output
+        .lines()
+        .filter_map(|line| {
+            let (container, host) = line.split_once("->")?;
+            let proto = container.trim().strip_prefix("53/")?;
+            Some((proto, host.trim()))
+        })
+        .collect();
+
+    match dns_port {
+        Some(port) => {
+            let want = format!("127.0.0.1:{port}");
+            bindings.iter().all(|(_, host)| *host == want)
+                && ["udp", "tcp"]
+                    .iter()
+                    .all(|p| bindings.iter().any(|(proto, _)| proto == p))
+        }
+        None => bindings
+            .iter()
+            .all(|(_, host)| host.rsplit_once(':').map(|(_, port)| port) == Some("53")),
     }
 }
 

@@ -111,6 +111,54 @@ pub fn build_hosts_content(current_raw: &str, hosts_container_lines: &[String]) 
     new_contents
 }
 
+/// Render `/etc/resolver/test`, which sends `.test` lookups to darp-masq on
+/// 127.0.0.1 — at `dns_port` when darp-masq has been moved off port 53.
+pub fn render_resolver_conf(dns_port: Option<u16>) -> String {
+    match dns_port {
+        Some(port) => format!("nameserver 127.0.0.1\nport {port}\n"),
+        None => "nameserver 127.0.0.1\n".to_string(),
+    }
+}
+
+/// The port a resolver file's `port` line names, if it has one.
+pub fn resolver_conf_port(contents: &str) -> Option<u16> {
+    contents.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        match (words.next(), words.next()) {
+            (Some("port"), Some(port)) => port.parse().ok(),
+            _ => None,
+        }
+    })
+}
+
+/// Whether `darp deploy` should rewrite the resolver file. With a custom port the
+/// file must match [`render_resolver_conf`] exactly. Without one, a file carrying any
+/// `port` line — from an earlier `dns_port` or added by hand — is rewritten without
+/// it, which is how `darp config rm dns-port` takes effect; any other file, or none,
+/// is left alone.
+pub fn resolver_conf_needs_sync(current: Option<&str>, dns_port: Option<u16>) -> bool {
+    match (dns_port, current) {
+        (Some(_), Some(contents)) => contents != render_resolver_conf(dns_port),
+        (Some(_), None) => true,
+        (None, Some(contents)) => resolver_conf_port(contents).is_some(),
+        (None, None) => false,
+    }
+}
+
+/// `Ok` when one sudo step of writing `file` succeeded; otherwise an error naming the
+/// file and the step, so a declined or failed sudo isn't reported as a write.
+pub fn ensure_resolver_step(
+    status: std::process::ExitStatus,
+    file: &str,
+    step: &str,
+) -> Result<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("could not write {file}: {step} failed ({status})"))
+    }
+}
+
 pub struct OsIntegration<'a> {
     paths: &'a DarpPaths,
     resolver_file: &'static str,
@@ -125,20 +173,45 @@ impl<'a> OsIntegration<'a> {
         }
     }
 
-    pub fn init_resolver(&self) -> Result<()> {
+    pub fn init_resolver(&self, dns_port: Option<u16>) -> Result<()> {
+        self.write_resolver(&render_resolver_conf(dns_port), Stdio::inherit())?;
+        println!("\n{} created", self.resolver_file.green());
+        Ok(())
+    }
+
+    /// Rewrite the resolver file (via sudo) when [`resolver_conf_needs_sync`] says it
+    /// no longer matches `dns_port`; otherwise leave it, and sudo, alone.
+    pub fn sync_resolver(&self, dns_port: Option<u16>) -> Result<()> {
+        let current = fs::read_to_string(self.resolver_file).ok();
+        if !resolver_conf_needs_sync(current.as_deref(), dns_port) {
+            return Ok(());
+        }
+
+        self.write_resolver(&render_resolver_conf(dns_port), Stdio::null())?;
+        let port = dns_port.unwrap_or(config::DEFAULT_DNS_PORT);
+        println!("{} now points at port {}", self.resolver_file.green(), port);
+        Ok(())
+    }
+
+    /// Write `contents` to the resolver file via `sudo tee`; `tee_stdout` decides
+    /// whether tee echoes them to the terminal. Fails, naming the file, when either
+    /// sudo step does.
+    fn write_resolver(&self, contents: &str, tee_stdout: Stdio) -> Result<()> {
         #[cfg(unix)]
         {
-            Command::new("sudo")
+            let file = self.resolver_file;
+            let status = Command::new("sudo")
                 .arg("mkdir")
                 .arg("-p")
                 .arg("/etc/resolver")
                 .status()?;
+            ensure_resolver_step(status, file, "sudo mkdir -p /etc/resolver")?;
 
             let mut child = Command::new("sudo")
                 .arg("tee")
-                .arg(self.resolver_file)
+                .arg(file)
                 .stdin(Stdio::piped())
-                .stdout(Stdio::inherit())
+                .stdout(tee_stdout)
                 .spawn()?;
 
             {
@@ -146,16 +219,17 @@ impl<'a> OsIntegration<'a> {
                     .stdin
                     .as_mut()
                     .ok_or_else(|| anyhow!("Could not open stdin"))?;
-                stdin.write_all(b"nameserver 127.0.0.1\n")?;
+                stdin
+                    .write_all(contents.as_bytes())
+                    .map_err(|e| anyhow!("could not write {file}: {e}"))?;
             }
 
-            child.wait()?;
-            println!("\n{} created", self.resolver_file.green());
-            Ok(())
+            ensure_resolver_step(child.wait()?, file, "sudo tee")
         }
 
         #[cfg(not(unix))]
         {
+            let _ = (contents, tee_stdout);
             Err(anyhow!(
                 "resolver initialization is currently implemented only on Unix-like systems"
             ))

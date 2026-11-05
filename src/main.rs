@@ -113,7 +113,7 @@ fn cmd_install(
 ) -> anyhow::Result<()> {
     println!("Running installation");
 
-    os.init_resolver()?;
+    os.init_resolver(config.custom_dns_port())?;
     os.ensure_dnsmasq_dir()?;
     os.copy_nginx_conf(config.nginx.as_ref())?;
     os.write_test_conf()?;

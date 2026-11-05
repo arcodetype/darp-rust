@@ -845,7 +845,11 @@ pub fn cmd_deploy(
 
     // Restart reverse proxy and stop darp_* containers
     engine.restart_reverse_proxy(paths)?;
-    engine.start_darp_masq(paths)?;
+    engine.start_darp_masq(paths, config.custom_dns_port())?;
+    // Non-fatal like a failed darp-masq start: names in /etc/hosts still resolve.
+    if let Err(e) = os.sync_resolver(config.custom_dns_port()) {
+        eprintln!("\nWarning: {e}. Re-run 'darp deploy' to retry.");
+    }
     engine.stop_running_darps()?;
 
     // Optionally sync /etc/hosts if urls_in_hosts is enabled

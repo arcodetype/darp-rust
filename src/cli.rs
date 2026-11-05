@@ -151,6 +151,12 @@ pub enum SetCommand {
     UrlsInHosts { value: String },
     /// Enable/disable WSL mode (syncs Windows hosts file and adds doctor checks)
     Wsl { value: String },
+    /// Set the host port darp's DNS server (darp-masq) listens on (default 53)
+    DnsPort {
+        /// Host port, e.g. 5300 when something else already holds port 53
+        #[arg(value_parser = clap::value_parser!(u16).range(1..))]
+        port: u16,
+    },
     /// Set a global nginx directive (http block, applies to every service)
     Nginx {
         /// nginx directive name (e.g. client_max_body_size, proxy_read_timeout)
@@ -620,6 +626,8 @@ pub enum RmCommand {
     },
     /// Remove PODMAN_MACHINE from config
     PodmanMachine {},
+    /// Remove dns_port from config (darp's DNS server goes back to port 53)
+    DnsPort {},
     /// Remove a global nginx directive (back to darp's default, if it has one)
     Nginx { directive: String },
     /// Remove domain-level configuration

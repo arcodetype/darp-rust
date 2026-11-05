@@ -227,4 +227,5 @@ darp config pull                # Git pull all pre_config repos
 - Your API must listen on **port 8000** inside the container.
 - Container images need **nginx** installed for the reverse proxy to work.
 - If `.test` domains aren't resolving, try `darp config set urls-in-hosts true` and re-run `darp deploy`.
+- If something else holds port 53 (a VPN's DNS proxy, for example), `darp config set dns-port 5300` and re-run `darp deploy`. See [DNS Port](docs/configuration.md#dns-port).
 - Run `darp install` again if you switch between Docker and Podman.

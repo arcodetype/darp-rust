@@ -695,6 +695,32 @@ pub fn cmd_set(
                 )),
             )?;
         }
+        SetCommand::DnsPort { port } => {
+            let msg = if port == config::DEFAULT_DNS_PORT {
+                format!(
+                    "dns_port set to {} (stored in {}), darp's default. Next 'darp deploy' keeps darp-masq on port {}, or moves it back there if it's on another port, and removes any port line from /etc/resolver/test.",
+                    port,
+                    p.display(),
+                    port
+                )
+            } else {
+                format!(
+                    "dns_port set to {} (stored in {}). Next 'darp deploy' moves darp-masq to 127.0.0.1:{} and points /etc/resolver/test at it.",
+                    port,
+                    p.display(),
+                    port
+                )
+            };
+            config_mutate(
+                config,
+                p,
+                |c| {
+                    c.dns_port = Some(port);
+                    Ok(())
+                },
+                Some(msg),
+            )?;
+        }
     }
 
     Ok(())
@@ -943,6 +969,21 @@ pub fn cmd_rm(cmd: RmCommand, paths: &DarpPaths, config: &mut Config) -> anyhow:
                     Ok(())
                 },
                 None,
+            )?;
+        }
+        RmCommand::DnsPort {} => {
+            config_mutate(
+                config,
+                p,
+                |c| {
+                    c.dns_port = None;
+                    Ok(())
+                },
+                Some(format!(
+                    "dns_port removed from {}. Next 'darp deploy' returns darp-masq to port {} unless a pre_config sets dns_port.",
+                    p.display(),
+                    config::DEFAULT_DNS_PORT
+                )),
             )?;
         }
         RmCommand::PreConfig { location } => {
