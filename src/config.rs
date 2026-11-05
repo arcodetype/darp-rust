@@ -1315,6 +1315,18 @@ impl Config {
         self.dns_port.filter(|port| *port != DEFAULT_DNS_PORT)
     }
 
+    /// `darp config set dns-port` rejects 0, but a hand-edited config or a pre_config
+    /// can still carry it. The engine would read 0 as "pick any port", which nothing
+    /// could then find.
+    fn validate_dns_port(&self) -> Result<()> {
+        if self.dns_port == Some(0) {
+            return Err(anyhow!(
+                "Config error: dns_port can't be 0. Run 'darp config rm dns-port', or 'darp config set dns-port <port>' if a pre_config sets it."
+            ));
+        }
+        Ok(())
+    }
+
     pub fn parse_bool(&self, s: &str) -> Result<bool> {
         let v = s.trim().to_lowercase();
         match v.as_str() {
@@ -4286,6 +4298,7 @@ impl Config {
 
         let cfg: Config = serde_json::from_value(merged)?;
         Self::validate_no_double_declarations(&cfg)?;
+        cfg.validate_dns_port()?;
         Ok(cfg)
     }
 }

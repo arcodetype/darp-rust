@@ -131,18 +131,62 @@ pub fn resolver_conf_port(contents: &str) -> Option<u16> {
     })
 }
 
-/// Whether `darp deploy` should rewrite the resolver file. With a custom port the
-/// file must match [`render_resolver_conf`] exactly. Without one, a file carrying any
-/// `port` line — from an earlier `dns_port` or added by hand — is rewritten without
-/// it, which is how `darp config rm dns-port` takes effect; any other file, or none,
-/// is left alone.
+/// The first word of a resolver file line, its option name.
+fn resolver_conf_option(line: &str) -> Option<&str> {
+    line.split_whitespace().next()
+}
+
+/// Whether `darp deploy` should rewrite the resolver file. With a custom port the file
+/// must name that port and only 127.0.0.1 as its nameserver; other options don't
+/// matter. Without one, a file carrying any `port` line — from an earlier `dns_port`
+/// or added by hand — is rewritten without it, which is how `darp config rm dns-port`
+/// takes effect; any other file, or none, is left alone.
 pub fn resolver_conf_needs_sync(current: Option<&str>, dns_port: Option<u16>) -> bool {
     match (dns_port, current) {
-        (Some(_), Some(contents)) => contents != render_resolver_conf(dns_port),
+        (Some(port), Some(contents)) => {
+            let mut nameservers = contents
+                .lines()
+                .filter(|line| resolver_conf_option(line) == Some("nameserver"))
+                .peekable();
+            let only_loopback = nameservers.peek().is_some()
+                && nameservers.all(|line| line.split_whitespace().nth(1) == Some("127.0.0.1"));
+            resolver_conf_port(contents) != Some(port) || !only_loopback
+        }
         (Some(_), None) => true,
         (None, Some(contents)) => resolver_conf_port(contents).is_some(),
         (None, None) => false,
     }
+}
+
+/// The resolver file deploy writes: `current` with its `port` line matching `dns_port`,
+/// keeping any other options, such as `timeout`. A custom port also takes over the
+/// nameserver, since the port only makes sense on darp-masq's 127.0.0.1.
+pub fn resolver_conf_synced(current: Option<&str>, dns_port: Option<u16>) -> String {
+    let Some(current) = current else {
+        return render_resolver_conf(dns_port);
+    };
+    let kept: Vec<&str> = current
+        .lines()
+        .filter(|line| match resolver_conf_option(line) {
+            Some("port") => false,
+            Some("nameserver") => dns_port.is_none(),
+            _ => true,
+        })
+        .collect();
+
+    let has_nameserver = kept
+        .iter()
+        .any(|line| resolver_conf_option(line) == Some("nameserver"));
+    let mut contents = if has_nameserver {
+        String::new()
+    } else {
+        render_resolver_conf(dns_port)
+    };
+    for line in kept {
+        contents.push_str(line);
+        contents.push('\n');
+    }
+    contents
 }
 
 /// `Ok` when one sudo step of writing `file` succeeded; otherwise an error naming the
@@ -180,17 +224,26 @@ impl<'a> OsIntegration<'a> {
     }
 
     /// Rewrite the resolver file (via sudo) when [`resolver_conf_needs_sync`] says it
-    /// no longer matches `dns_port`; otherwise leave it, and sudo, alone.
+    /// no longer matches `dns_port`; otherwise leave it, and sudo, alone. Only macOS
+    /// reads this file, so elsewhere there's nothing to keep in sync.
     pub fn sync_resolver(&self, dns_port: Option<u16>) -> Result<()> {
+        if !cfg!(target_os = "macos") {
+            return Ok(());
+        }
+
         let current = fs::read_to_string(self.resolver_file).ok();
         if !resolver_conf_needs_sync(current.as_deref(), dns_port) {
             return Ok(());
         }
 
-        self.write_resolver(&render_resolver_conf(dns_port), Stdio::null())?;
         let port = dns_port.unwrap_or(config::DEFAULT_DNS_PORT);
-        println!("{} now points at port {}", self.resolver_file.green(), port);
-        Ok(())
+        println!(
+            "pointing {} at port {} (needs sudo)",
+            self.resolver_file.green(),
+            port
+        );
+        let contents = resolver_conf_synced(current.as_deref(), dns_port);
+        self.write_resolver(&contents, Stdio::null())
     }
 
     /// Write `contents` to the resolver file via `sudo tee`; `tee_stdout` decides

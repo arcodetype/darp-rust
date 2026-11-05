@@ -293,6 +293,7 @@ pub fn plan_deployment(paths: &DarpPaths, config: &Config) -> anyhow::Result<Vec
     // Ports never handed out: well-known services + any host port darp itself publishes.
     let mut skip_debug_ports = config::well_known_skip_ports();
     skip_debug_ports.extend(collect_host_portmap_ports(config));
+    skip_debug_ports.extend(config.custom_dns_port());
     // Seed "reserved" only with persisted ports we'll actually keep (in-range and not
     // skipped) so a kept port isn't reassigned to another service. Persisted ports below
     // the current base (e.g. an old 9003+ range) or now in the skip-list are dropped here
@@ -845,10 +846,13 @@ pub fn cmd_deploy(
 
     // Restart reverse proxy and stop darp_* containers
     engine.restart_reverse_proxy(paths)?;
-    engine.start_darp_masq(paths, config.custom_dns_port())?;
-    // Non-fatal like a failed darp-masq start: names in /etc/hosts still resolve.
-    if let Err(e) = os.sync_resolver(config.custom_dns_port()) {
-        eprintln!("\nWarning: {e}. Re-run 'darp deploy' to retry.");
+    // If darp-masq didn't get where it was going, the resolver file must not either: it
+    // has to keep pointing at whatever is still serving. Neither failure stops deploy,
+    // since names in /etc/hosts still resolve.
+    if engine.start_darp_masq(paths, config.custom_dns_port())? {
+        if let Err(e) = os.sync_resolver(config.custom_dns_port()) {
+            eprintln!("\nWarning: {e}. Re-run 'darp deploy' to retry.");
+        }
     }
     engine.stop_running_darps()?;
 

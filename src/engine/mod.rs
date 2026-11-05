@@ -439,52 +439,150 @@ impl Engine {
         }
     }
 
-    /// Force-remove a container and wait until it is gone, so its name can be reused
-    /// straight away. A container that doesn't exist is not an error.
+    /// Force-remove a container, so its name can be reused. A container that doesn't
+    /// exist is not an error; any other failure carries the engine's own message.
     fn remove_container(&self, name: &str) -> Result<()> {
         let Some(bin) = self.bin else { return Ok(()) };
-        Command::new(bin)
-            .arg("rm")
-            .arg("-f")
-            .arg(name)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        Ok(())
+        let output = Command::new(bin).arg("rm").arg("-f").arg(name).output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.success() || is_missing_container_error(&stderr) {
+            return Ok(());
+        }
+        Err(anyhow!("could not remove {name}: {}", stderr.trim()))
     }
 
-    /// Start darp-masq published where `dns_port` says ([`darp_masq_publish_args`]).
-    /// A running darp-masq is left alone unless it is published somewhere else, in
-    /// which case it is replaced. A start the engine rejects — a port already taken —
-    /// prints [`darp_masq_start_warning`] instead of failing, so the rest of deploy
-    /// still runs.
-    pub fn start_darp_masq(&self, paths: &DarpPaths, dns_port: Option<u16>) -> Result<()> {
-        let Some(bin) = self.bin else { return Ok(()) };
+    /// Put darp-masq where `dns_port` says ([`darp_masq_publish_args`]), returning
+    /// whether it is running there. `false` means a warning was printed and deploy
+    /// should leave the resolver file alone, so it keeps matching what is running.
+    ///
+    /// A running darp-masq on the right port is left alone. One published elsewhere is
+    /// only removed once its replacement is up, so a port that turns out to be taken
+    /// costs nothing: the old one keeps serving. The exception is a darp-masq already
+    /// holding the target port (say on another interface), which has to go first.
+    pub fn start_darp_masq(&self, paths: &DarpPaths, dns_port: Option<u16>) -> Result<bool> {
+        if self.bin.is_none() {
+            return Ok(false);
+        }
         const DNSMASQ: &str = "darp-masq";
+        const REPLACEMENT: &str = "darp-masq-next";
 
-        if self.is_container_running(DNSMASQ) {
-            if darp_masq_ports_match(&self.container_port_bindings(DNSMASQ), dns_port) {
-                return Ok(());
-            }
+        let running = self.is_container_running(DNSMASQ);
+        let bindings = if running {
+            self.container_port_bindings(DNSMASQ)
+        } else {
+            String::new()
+        };
+        if running && darp_masq_ports_match(&bindings, dns_port) {
+            return Ok(true);
+        }
+
+        // A replacement left by an interrupted deploy would hold its name and the port.
+        if let Err(e) = self.remove_container(REPLACEMENT) {
+            eprintln!("\nWarning: {e}");
+            return Ok(false);
+        }
+
+        if running && !darp_masq_holds_target_port(&bindings, dns_port) {
             println!(
                 "moving {} to {}",
                 DNSMASQ.green(),
                 darp_masq_bind_label(dns_port)
             );
-            self.remove_container(DNSMASQ)?;
-        } else if dns_port.is_some() {
-            // A stopped darp-masq created by hand without --rm would hold the name.
-            self.remove_container(DNSMASQ)?;
+            return self.replace_darp_masq(paths, DNSMASQ, REPLACEMENT, dns_port);
+        }
+
+        // Nothing running to preserve: this clears a darp-masq holding the target port,
+        // or a stopped one created by hand without --rm that would hold the name.
+        if let Err(e) = self.remove_container(DNSMASQ) {
+            eprintln!("\nWarning: {e}");
+            return Ok(false);
         }
 
         println!("starting {}", DNSMASQ.green());
+        let output = self.run_darp_masq(paths, DNSMASQ, dns_port)?;
+        if !output.status.success() {
+            eprintln!(
+                "\n{}",
+                darp_masq_start_warning(&String::from_utf8_lossy(&output.stderr), dns_port)
+            );
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Start the replacement beside the running darp-masq, then swap it in. Any failure
+    /// before the old one is gone leaves the old one serving.
+    fn replace_darp_masq(
+        &self,
+        paths: &DarpPaths,
+        current: &str,
+        replacement: &str,
+        dns_port: Option<u16>,
+    ) -> Result<bool> {
+        let output = self.run_darp_masq(paths, replacement, dns_port)?;
+        if !output.status.success() {
+            // A failed start can leave the created container behind.
+            let _ = self.remove_container(replacement);
+            eprintln!(
+                "\n{}",
+                darp_masq_move_warning(&String::from_utf8_lossy(&output.stderr), dns_port)
+            );
+            return Ok(false);
+        }
+
+        if let Err(e) = self.remove_container(current) {
+            let _ = self.remove_container(replacement);
+            eprintln!("\n{}", darp_masq_move_warning(&e.to_string(), dns_port));
+            return Ok(false);
+        }
+
+        // The replacement is serving on the right port by now, so a failed rename only
+        // leaves it under the wrong name; the next deploy clears that up.
+        let bin = self.bin.expect("checked by start_darp_masq");
+        let renamed = Command::new(bin)
+            .arg("rename")
+            .arg(replacement)
+            .arg(current)
+            .output()?;
+        if !renamed.status.success() {
+            eprintln!(
+                "\nWarning: {current} is running as {replacement}, and could not be renamed: {}",
+                String::from_utf8_lossy(&renamed.stderr).trim()
+            );
+        }
+        Ok(true)
+    }
+
+    /// Pull darp-masq's image if it's missing, with the engine's progress on screen.
+    /// A failed pull isn't reported here: the `run` that follows fails with the reason.
+    fn ensure_darp_masq_image(&self, bin: &str) {
+        let present = Command::new(bin)
+            .arg("image")
+            .arg("inspect")
+            .arg(DARP_MASQ_IMAGE)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !present {
+            println!("pulling {}", DARP_MASQ_IMAGE.green());
+            let _ = Command::new(bin).arg("pull").arg(DARP_MASQ_IMAGE).status();
+        }
+    }
+
+    /// `{engine} run` a darp-masq under `name`, returning the engine's output. Output
+    /// is captured to report a failed start, so the image is pulled beforehand.
+    fn run_darp_masq(
+        &self,
+        paths: &DarpPaths,
+        name: &str,
+        dns_port: Option<u16>,
+    ) -> Result<std::process::Output> {
+        let bin = self.bin.expect("checked by start_darp_masq");
+        self.ensure_darp_masq_image(bin);
 
         let mut cmd = Command::new(bin);
-        cmd.arg("run")
-            .arg("-d")
-            .arg("--rm")
-            .arg("--name")
-            .arg(DNSMASQ);
+        cmd.arg("run").arg("-d").arg("--rm").arg("--name").arg(name);
         for publish in darp_masq_publish_args(dns_port) {
             cmd.arg("-p").arg(publish);
         }
@@ -497,14 +595,7 @@ impl Engine {
                 .arg("host.docker.internal:host-gateway");
         }
 
-        let output = cmd.arg("dockurr/dnsmasq").output()?;
-        if !output.status.success() {
-            eprintln!(
-                "\n{}",
-                darp_masq_start_warning(&String::from_utf8_lossy(&output.stderr), dns_port)
-            );
-        }
-        Ok(())
+        Ok(cmd.arg(DARP_MASQ_IMAGE).output()?)
     }
 
     pub fn stop_running_darps(&self) -> Result<()> {
@@ -596,6 +687,8 @@ impl Engine {
     }
 }
 
+const DARP_MASQ_IMAGE: &str = "dockurr/dnsmasq";
+
 /// darp-masq's `-p` values: darp's default `53:53` on every interface, or
 /// `127.0.0.1:{port}:53` once `dns_port` moves it. dnsmasq listens on 53 inside the
 /// container either way.
@@ -619,13 +712,29 @@ pub fn darp_masq_bind_label(dns_port: Option<u16>) -> String {
 }
 
 /// The warning deploy prints when the engine refuses to start darp-masq, carrying the
-/// engine's own error. A failed publish on port 53 also names `dns-port`, since the
-/// usual cause is another program holding 53.
+/// engine's own error.
 pub fn darp_masq_start_warning(stderr: &str, dns_port: Option<u16>) -> String {
-    let mut msg = format!(
-        "Warning: darp-masq did not start on {}, so .test names that aren't in /etc/hosts won't resolve:\n",
+    let headline = format!(
+        "Warning: darp-masq did not start on {}, so .test names that aren't in /etc/hosts won't resolve:",
         darp_masq_bind_label(dns_port)
     );
+    darp_masq_warning(&headline, stderr, dns_port)
+}
+
+/// The warning deploy prints when a running darp-masq couldn't be moved. Nothing was
+/// lost: the old one is still serving and the resolver file still points at it.
+pub fn darp_masq_move_warning(stderr: &str, dns_port: Option<u16>) -> String {
+    let headline = format!(
+        "Warning: could not move darp-masq to {}. The running darp-masq and /etc/resolver/test were left as they were:",
+        darp_masq_bind_label(dns_port)
+    );
+    darp_masq_warning(&headline, stderr, dns_port)
+}
+
+/// `headline`, then the engine's error. A bind failure on port 53 also names
+/// `dns-port`, since the usual cause is another program holding 53.
+fn darp_masq_warning(headline: &str, stderr: &str, dns_port: Option<u16>) -> String {
+    let mut msg = format!("{headline}\n");
     let error = stderr.trim();
     if error.is_empty() {
         msg.push_str("  (no error output from the container engine)\n");
@@ -634,7 +743,7 @@ pub fn darp_masq_start_warning(stderr: &str, dns_port: Option<u16>) -> String {
             msg.push_str(&format!("  {line}\n"));
         }
     }
-    if dns_port.is_none() {
+    if dns_port.is_none() && is_port_conflict_error(error) {
         msg.push_str(
             "\nIf another program holds port 53 (a VPN's DNS proxy, for example), move darp's\n\
              DNS server off it, then re-run 'darp deploy':\n\
@@ -644,20 +753,56 @@ pub fn darp_masq_start_warning(stderr: &str, dns_port: Option<u16>) -> String {
     msg.trim_end().to_string()
 }
 
-/// Whether `{engine} port darp-masq` output (`53/udp -> 0.0.0.0:53` lines) shows it
-/// published where `dns_port` wants it. A custom port needs exactly UDP and TCP on
-/// `127.0.0.1:{port}`. The default needs every binding on host port 53: a darp-masq
-/// on 53, or one whose bindings can't be read, is left running, while one published
-/// on any other port — moved there by `dns_port` or by hand — is replaced.
-pub fn darp_masq_ports_match(port_output: &str, dns_port: Option<u16>) -> bool {
-    let bindings: Vec<(&str, &str)> = port_output
+/// Whether an engine error means a host port was taken, as opposed to, say, a container
+/// name being "already in use".
+fn is_port_conflict_error(stderr: &str) -> bool {
+    let stderr = stderr.to_lowercase();
+    [
+        "address already in use",
+        "port is already allocated",
+        "ports are not available",
+    ]
+    .iter()
+    .any(|needle| stderr.contains(needle))
+}
+
+/// Whether `{engine} rm` failed only because the container doesn't exist, which some
+/// engine versions report with a non-zero exit.
+fn is_missing_container_error(stderr: &str) -> bool {
+    stderr.to_lowercase().contains("no such container")
+}
+
+/// `(protocol, host address)` for each of darp-masq's port 53 lines in `{engine} port`
+/// output (`53/udp -> 0.0.0.0:53`).
+fn darp_masq_bindings(port_output: &str) -> Vec<(&str, &str)> {
+    port_output
         .lines()
         .filter_map(|line| {
             let (container, host) = line.split_once("->")?;
             let proto = container.trim().strip_prefix("53/")?;
             Some((proto, host.trim()))
         })
-        .collect();
+        .collect()
+}
+
+/// Whether `{engine} port darp-masq` output shows it already holding the host port
+/// `dns_port` calls for, on any interface. A replacement can't start beside it then.
+pub fn darp_masq_holds_target_port(port_output: &str, dns_port: Option<u16>) -> bool {
+    let target = dns_port.unwrap_or(crate::config::DEFAULT_DNS_PORT);
+    darp_masq_bindings(port_output).iter().any(|(_, host)| {
+        host.rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+            == Some(target)
+    })
+}
+
+/// Whether `{engine} port darp-masq` output (`53/udp -> 0.0.0.0:53` lines) shows it
+/// published where `dns_port` wants it. A custom port needs exactly UDP and TCP on
+/// `127.0.0.1:{port}`. The default needs every binding on host port 53: a darp-masq
+/// on 53, or one whose bindings can't be read, is left running, while one published
+/// on any other port — moved there by `dns_port` or by hand — is replaced.
+pub fn darp_masq_ports_match(port_output: &str, dns_port: Option<u16>) -> bool {
+    let bindings = darp_masq_bindings(port_output);
 
     match dns_port {
         Some(port) => {

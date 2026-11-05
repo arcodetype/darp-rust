@@ -345,22 +345,27 @@ darp deploy
 ```
 
 `darp deploy` then publishes darp-masq on `127.0.0.1:5300` only (dnsmasq still
-listens on 53 inside the container), replacing a darp-masq published anywhere else,
-and adds `port 5300` to `/etc/resolver/test`, which needs sudo. `darp install`
-writes the same resolver file. Both settle on the configured port on every run,
-so a reinstall or redeploy keeps it. Only macOS reads that `port` line
-(resolver(5)); Linux never reads `/etc/resolver/test`, so no host lookup reaches a
-moved darp-masq there — use `darp config set urls-in-hosts true` instead.
+listens on 53 inside the container), replacing a darp-masq published anywhere else.
+On macOS it also adds `port 5300` to `/etc/resolver/test`, which needs sudo, keeping
+any other options in the file. `darp install` writes the resolver file from scratch
+with the same port. Both settle on the configured port on every run, so a reinstall
+or redeploy keeps it. Only macOS reads that `port` line (resolver(5)); Linux never
+reads `/etc/resolver/test`, so deploy doesn't touch it there and no host lookup
+reaches a moved darp-masq — use `darp config set urls-in-hosts true` instead.
 
 `darp config rm dns-port` and another `darp deploy` put both back on port 53.
 Unset, or set to `53`, darp-masq is published on port 53 on every interface.
 Deploy then leaves a darp-masq already on 53 alone and replaces one published on
-any other port, and it rewrites `/etc/resolver/test` (sudo) only when the file has
-a `port` line, removing it. That holds for a darp-masq or `port` line set up by
-hand, too, so set `dns-port` before deploying on a machine that moved darp-masq
-itself. If darp-masq can't start — its port is already taken — or the resolver
-file can't be written, deploy prints a warning and carries on. `darp doctor` warns
-when either one doesn't match the setting.
+any other port, and on macOS it rewrites `/etc/resolver/test` (sudo) only when the
+file has a `port` line, removing it. That holds for a darp-masq or `port` line set
+up by hand, too, so set `dns-port` before deploying on a machine that moved
+darp-masq itself.
+
+A running darp-masq is only removed once its replacement has started. If the new
+port is already taken, deploy prints a warning and carries on, leaving the running
+darp-masq and the resolver file as they were. `darp doctor` warns when either one
+doesn't match the setting. If darp-masq wasn't running and can't start, or the
+resolver file can't be written, deploy also warns and carries on.
 
 ## Viewing Resolved Config
 

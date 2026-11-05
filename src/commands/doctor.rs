@@ -178,17 +178,20 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
                     } else {
                         s.warn("/etc/resolver/test has unexpected content");
                     }
-                    match (dns_port, os::resolver_conf_port(&contents)) {
-                        (Some(want), Some(found)) if want == found => {
-                            s.ok(&format!("Contains: port {want} (dns_port)"));
+                    // Only macOS reads the file, and only there does deploy sync it.
+                    if cfg!(target_os = "macos") {
+                        match (dns_port, os::resolver_conf_port(&contents)) {
+                            (Some(want), Some(found)) if want == found => {
+                                s.ok(&format!("Contains: port {want} (dns_port)"));
+                            }
+                            (Some(want), _) => s.warn(&format!(
+                                "dns_port is {want} but /etc/resolver/test does not name port {want} — run 'darp deploy'"
+                            )),
+                            (None, Some(found)) => s.warn(&format!(
+                                "/etc/resolver/test names port {found} but dns_port is not set — run 'darp deploy'"
+                            )),
+                            (None, None) => {}
                         }
-                        (Some(want), _) => s.warn(&format!(
-                            "dns_port is {want} but /etc/resolver/test does not name port {want} — run 'darp deploy'"
-                        )),
-                        (None, Some(found)) => s.warn(&format!(
-                            "/etc/resolver/test names port {found} but dns_port is not set — run 'darp deploy'"
-                        )),
-                        (None, None) => {}
                     }
                 }
                 Err(_) => {
