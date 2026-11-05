@@ -169,7 +169,10 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
         let mut s = DoctorSection::new("DNS resolver");
         let resolver_path = Path::new("/etc/resolver/test");
 
-        if resolver_path.exists() {
+        // Only macOS reads the file, so only there do install and deploy write it.
+        if !cfg!(target_os = "macos") {
+            s.ok("/etc/resolver/test isn't used on this system");
+        } else if resolver_path.exists() {
             s.ok("/etc/resolver/test exists");
             match fs::read_to_string(resolver_path) {
                 Ok(contents) => {
@@ -178,20 +181,22 @@ pub fn cmd_doctor(paths: &DarpPaths, config: &Config, engine: &Engine) -> anyhow
                     } else {
                         s.warn("/etc/resolver/test has unexpected content");
                     }
-                    // Only macOS reads the file, and only there does deploy sync it.
-                    if cfg!(target_os = "macos") {
-                        match (dns_port, os::resolver_conf_port(&contents)) {
-                            (Some(want), Some(found)) if want == found => {
-                                s.ok(&format!("Contains: port {want} (dns_port)"));
-                            }
-                            (Some(want), _) => s.warn(&format!(
-                                "dns_port is {want} but /etc/resolver/test does not name port {want} — run 'darp deploy'"
-                            )),
-                            (None, Some(found)) => s.warn(&format!(
-                                "/etc/resolver/test names port {found} but dns_port is not set — run 'darp deploy'"
-                            )),
-                            (None, None) => {}
+                    // Deploy's own check, so doctor can't pass a file deploy would rewrite.
+                    let in_sync = !os::resolver_conf_needs_sync(Some(&contents), dns_port);
+                    match (dns_port, os::resolver_conf_port(&contents)) {
+                        (Some(want), Some(found)) if want == found && in_sync => {
+                            s.ok(&format!("Contains: port {want} (dns_port)"));
                         }
+                        (Some(want), Some(found)) if want == found => s.warn(&format!(
+                            "dns_port is {want} but /etc/resolver/test names a nameserver other than 127.0.0.1 — run 'darp deploy'"
+                        )),
+                        (Some(want), _) => s.warn(&format!(
+                            "dns_port is {want} but /etc/resolver/test does not name port {want} — run 'darp deploy'"
+                        )),
+                        (None, Some(found)) => s.warn(&format!(
+                            "/etc/resolver/test names port {found} but dns_port is not set — run 'darp deploy'"
+                        )),
+                        (None, None) => {}
                     }
                 }
                 Err(_) => {

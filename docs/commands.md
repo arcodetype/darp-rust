@@ -88,7 +88,7 @@ Checks your system health and darp configuration. Verifies:
 
 - Darp root directory and core files (config.json, nginx.conf, dnsmasq config)
 - Container engine installation and status
-- DNS resolver configuration (/etc/resolver/test)
+- DNS resolver configuration (/etc/resolver/test, on macOS)
 - Infrastructure containers (reverse proxy, dnsmasq)
 - Shell completions
 - Domain configurations and filesystem state

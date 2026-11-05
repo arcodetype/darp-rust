@@ -1171,6 +1171,7 @@ impl Config {
         maybe_migrate(path)?;
 
         let data = fs::read(path)?;
+        Self::validate_raw_dns_port(&serde_json::from_slice(&data).unwrap_or_default())?;
         let cfg: Config = serde_json::from_slice(&data).unwrap_or_default();
         Self::validate_no_double_declarations(&cfg)?;
         Ok(cfg)
@@ -1313,6 +1314,20 @@ impl Config {
     /// A `dns_port` of 53 is the default, so it returns `None` too.
     pub fn custom_dns_port(&self) -> Option<u16> {
         self.dns_port.filter(|port| *port != DEFAULT_DNS_PORT)
+    }
+
+    /// Reject a `dns_port` that can't be a port, before it reaches `Config`. The whole
+    /// file would otherwise fail to parse, and `Config::load` would fall back to an
+    /// empty config that the next `darp config set` saves over the real one. A 0 parses,
+    /// so it's left to [`Self::validate_dns_port`], where `config rm` can still clear it.
+    fn validate_raw_dns_port(value: &serde_json::Value) -> Result<()> {
+        match value.get("dns_port") {
+            None | Some(serde_json::Value::Null) => Ok(()),
+            Some(port) if port.as_u64().is_some_and(|p| p <= u64::from(u16::MAX)) => Ok(()),
+            Some(port) => Err(anyhow!(
+                "Config error: dns_port must be a port from 1 to 65535, but is {port}. Fix or remove it in config.json, or in the pre_config that sets it."
+            )),
+        }
     }
 
     /// `darp config set dns-port` rejects 0, but a hand-edited config or a pre_config
@@ -4296,6 +4311,7 @@ impl Config {
             obj.remove("pre_config");
         }
 
+        Self::validate_raw_dns_port(&merged)?;
         let cfg: Config = serde_json::from_value(merged)?;
         Self::validate_no_double_declarations(&cfg)?;
         cfg.validate_dns_port()?;

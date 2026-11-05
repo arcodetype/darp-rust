@@ -696,19 +696,32 @@ pub fn cmd_set(
             )?;
         }
         SetCommand::DnsPort { port } => {
+            let macos = cfg!(target_os = "macos");
             let msg = if port == config::DEFAULT_DNS_PORT {
+                let resolver = if macos {
+                    ", and removes any port line from /etc/resolver/test"
+                } else {
+                    ""
+                };
                 format!(
-                    "dns_port set to {} (stored in {}), darp's default. Next 'darp deploy' keeps darp-masq on port {}, or moves it back there if it's on another port, and removes any port line from /etc/resolver/test.",
+                    "dns_port set to {} (stored in {}), darp's default. Next 'darp deploy' keeps darp-masq on port {}, or moves it back there if it's on another port{}.",
                     port,
                     p.display(),
-                    port
+                    port,
+                    resolver
                 )
             } else {
+                let resolver = if macos {
+                    " and points /etc/resolver/test at it."
+                } else {
+                    ". This system's resolver won't look there, so for .test names: darp config set urls-in-hosts true"
+                };
                 format!(
-                    "dns_port set to {} (stored in {}). Next 'darp deploy' moves darp-masq to 127.0.0.1:{} and points /etc/resolver/test at it.",
+                    "dns_port set to {} (stored in {}). Next 'darp deploy' moves darp-masq to 127.0.0.1:{}{}",
                     port,
                     p.display(),
-                    port
+                    port,
+                    resolver
                 )
             };
             config_mutate(

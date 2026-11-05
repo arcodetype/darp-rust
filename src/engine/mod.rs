@@ -735,22 +735,38 @@ pub fn darp_masq_move_warning(stderr: &str, dns_port: Option<u16>) -> String {
 /// `dns-port`, since the usual cause is another program holding 53.
 fn darp_masq_warning(headline: &str, stderr: &str, dns_port: Option<u16>) -> String {
     let mut msg = format!("{headline}\n");
-    let error = stderr.trim();
-    if error.is_empty() {
+    // Docker follows its errors with a pointer to `docker run --help`, which is no use here.
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with("Run '"))
+        .collect();
+    if lines.is_empty() {
         msg.push_str("  (no error output from the container engine)\n");
-    } else {
-        for line in error.lines() {
-            msg.push_str(&format!("  {line}\n"));
-        }
     }
-    if dns_port.is_none() && is_port_conflict_error(error) {
-        msg.push_str(
-            "\nIf another program holds port 53 (a VPN's DNS proxy, for example), move darp's\n\
-             DNS server off it, then re-run 'darp deploy':\n\
-             \n  darp config set dns-port <port>\n",
-        );
+    for line in lines {
+        msg.push_str(&format!("  {line}\n"));
+    }
+    if dns_port.is_none() && is_port_conflict_error(stderr) {
+        msg.push('\n');
+        msg.push_str(darp_masq_port_conflict_hint(cfg!(target_os = "macos")));
     }
     msg.trim_end().to_string()
+}
+
+/// What to do when another program holds port 53. Moving darp-masq is enough on macOS,
+/// whose resolver follows it to the new port. Other systems never ask a moved darp-masq
+/// anything, so `.test` names have to go through /etc/hosts as well.
+pub fn darp_masq_port_conflict_hint(macos: bool) -> &'static str {
+    if macos {
+        "If another program holds port 53 (a VPN's DNS proxy, for example), move darp's\n\
+         DNS server off it, then re-run 'darp deploy':\n\
+         \n  darp config set dns-port <port>\n"
+    } else {
+        "If another program holds port 53 (a VPN's DNS proxy, for example), resolve .test\n\
+         names through /etc/hosts and move darp's DNS server off it, then re-run 'darp deploy':\n\
+         \n  darp config set urls-in-hosts true\
+         \n  darp config set dns-port <port>\n"
+    }
 }
 
 /// Whether an engine error means a host port was taken, as opposed to, say, a container

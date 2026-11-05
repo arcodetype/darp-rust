@@ -140,7 +140,7 @@ fn cmd_install(
     }
 
     // Last, as it's the one step that can fail on a declined or missing sudo, which
-    // shouldn't cost the steps above: Linux hosts don't read this file at all.
+    // shouldn't cost the steps above.
     os.init_resolver(config.custom_dns_port())?;
 
     Ok(())

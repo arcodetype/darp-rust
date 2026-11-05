@@ -14,7 +14,8 @@ use darp::commands::plan_deployment;
 use darp::config::{Config, DEBUG_PORT_BASE, DEFAULT_DNS_PORT, DarpPaths};
 use darp::engine::{
     darp_masq_bind_label, darp_masq_holds_target_port, darp_masq_move_warning,
-    darp_masq_ports_match, darp_masq_publish_args, darp_masq_start_warning,
+    darp_masq_port_conflict_hint, darp_masq_ports_match, darp_masq_publish_args,
+    darp_masq_start_warning,
 };
 use darp::os::{
     ensure_resolver_step, render_resolver_conf, resolver_conf_needs_sync, resolver_conf_port,
@@ -516,4 +517,77 @@ fn debug_ports_are_never_assigned_darp_masqs_port() {
 
     let services = plan_deployment(&paths, &config(Some(first_debug_port))).unwrap();
     assert_ne!(services[0].debug_port, first_debug_port);
+}
+
+// ---- Out-of-range ports ----
+
+#[test]
+fn an_out_of_range_dns_port_is_an_error_and_never_overwrites_the_config() {
+    let bin = darp_bin();
+    for bad in ["70000", "-1", "\"5300\""] {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.json");
+        let original = format!(r#"{{"dns_port": {bad}, "podman_machine": "keep-me"}}"#);
+        std::fs::write(&config, &original).unwrap();
+
+        let err = Config::load_merged(&config).unwrap_err().to_string();
+        assert!(err.contains("dns_port"), "{err}");
+
+        let out = run_darp(
+            &bin,
+            root.path(),
+            &["config", "set", "urls-in-hosts", "true"],
+        );
+        assert!(!out.status.success(), "dns_port {bad} was accepted");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("dns_port"),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    }
+}
+
+#[test]
+fn an_out_of_range_dns_port_from_a_pre_config_is_an_error() {
+    let root = tempfile::tempdir().unwrap();
+    let team = root.path().join("team.json");
+    std::fs::write(&team, r#"{"dns_port": 70000}"#).unwrap();
+    let leaf = root.path().join("config.json");
+    std::fs::write(
+        &leaf,
+        format!(
+            r#"{{"pre_config": [{{"location": "{}"}}]}}"#,
+            team.display()
+        ),
+    )
+    .unwrap();
+
+    let err = Config::load_merged(&leaf).unwrap_err().to_string();
+    assert!(err.contains("dns_port must be a port"), "{err}");
+}
+
+// ---- Warning text ----
+
+#[test]
+fn port_conflict_hint_matches_how_the_system_resolves_test_names() {
+    let macos = darp_masq_port_conflict_hint(true);
+    assert!(macos.contains("darp config set dns-port"), "{macos}");
+    assert!(!macos.contains("urls-in-hosts"), "{macos}");
+
+    let other = darp_masq_port_conflict_hint(false);
+    assert!(other.contains("darp config set dns-port"), "{other}");
+    assert!(
+        other.contains("darp config set urls-in-hosts true"),
+        "{other}"
+    );
+}
+
+#[test]
+fn warnings_drop_dockers_help_pointer() {
+    let stderr = "docker: Error response from daemon: port is already allocated\n\nRun 'docker run --help' for more information\n";
+    let warning = darp_masq_start_warning(stderr, Some(5300));
+    assert!(warning.contains("port is already allocated"), "{warning}");
+    assert!(!warning.contains("--help"), "{warning}");
+    assert!(!warning.contains("  \n"), "{warning:?}");
 }

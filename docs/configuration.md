@@ -350,7 +350,7 @@ On macOS it also adds `port 5300` to `/etc/resolver/test`, which needs sudo, kee
 any other options in the file. `darp install` writes the resolver file from scratch
 with the same port. Both settle on the configured port on every run, so a reinstall
 or redeploy keeps it. Only macOS reads that `port` line (resolver(5)); Linux never
-reads `/etc/resolver/test`, so deploy doesn't touch it there and no host lookup
+reads `/etc/resolver/test`, so neither command writes it there and no host lookup
 reaches a moved darp-masq — use `darp config set urls-in-hosts true` instead.
 
 `darp config rm dns-port` and another `darp deploy` put both back on port 53.

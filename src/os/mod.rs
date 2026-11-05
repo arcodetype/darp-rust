@@ -217,7 +217,17 @@ impl<'a> OsIntegration<'a> {
         }
     }
 
+    /// Write the resolver file from scratch (via sudo). Only macOS reads it, so elsewhere
+    /// this explains what to use instead, without asking for sudo.
     pub fn init_resolver(&self, dns_port: Option<u16>) -> Result<()> {
+        if !cfg!(target_os = "macos") {
+            println!(
+                "skipping {}, which only macOS reads. For .test names on this system: darp config set urls-in-hosts true",
+                self.resolver_file
+            );
+            return Ok(());
+        }
+
         self.write_resolver(&render_resolver_conf(dns_port), Stdio::inherit())?;
         println!("\n{} created", self.resolver_file.green());
         Ok(())
